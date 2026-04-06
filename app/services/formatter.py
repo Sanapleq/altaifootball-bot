@@ -142,7 +142,11 @@ class FootballFormatter:
             Текст для Telegram.
         """
         if not matches:
-            return f"📭 {title}\n\nМатчей пока нет или не удалось загрузить данные."
+            return (
+                f"📭 <b>{escape_html(title)}</b>\n\n"
+                "Матчей пока нет или они ещё не опубликованы на сайте.\n"
+                "Попробуйте проверить позже или выберите другую команду."
+            )
 
         lines = [f"📅 <b>{escape_html(title)}</b>\n"]
 

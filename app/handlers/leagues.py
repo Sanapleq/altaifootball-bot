@@ -54,28 +54,43 @@ async def _find_team_by_id(team_id: str) -> Team | None:
         Всегда сохраняйте команду в state при первом обнаружении.
     """
     leagues_list = await deps.football_service.get_leagues()
+    logger.debug(
+        "Поиск команды %s: перебираем %d лиг", team_id, len(leagues_list)
+    )
     for league in leagues_list:
         try:
             teams = await deps.football_service.get_league_teams(league)
             for team in teams:
                 if team.id == team_id:
+                    logger.info(
+                        "Команда %s найдена в лиге %s", team.name, league.name
+                    )
                     return team
         except Exception as exc:
             logger.warning("Ошибка загрузки команд лиги %s: %s", league.name, exc)
+    logger.warning("Команда с ID=%s не найдена ни в одной лиге", team_id)
     return None
 
 
 async def _find_league_for_team(team_id: str) -> League | None:
     """Найти лигу, в которой играет команда с данным ID."""
     leagues_list = await deps.football_service.get_leagues()
+    logger.debug(
+        "Поиск лиги для команды %s: перебираем %d лиг",
+        team_id, len(leagues_list),
+    )
     for league in leagues_list:
         try:
             teams = await deps.football_service.get_league_teams(league)
             for team in teams:
                 if team.id == team_id:
+                    logger.info(
+                        "Лига %s найдена для команды %s", league.name, team.name
+                    )
                     return league
         except Exception as exc:
             logger.warning("Ошибка поиска лиги для команды %s: %s", team_id, exc)
+    logger.warning("Не удалось найти лигу для команды с ID=%s", team_id)
     return None
 
 

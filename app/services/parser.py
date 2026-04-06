@@ -878,6 +878,7 @@ class SiteParser:
         - Стандартный парсинг матчевых таблиц/карточек
         - Fallback: парсинг компактных строк «дата — соперник — счёт»
         - Fallback: извлечение матчей из div/li блоков с датами и ссылками
+        - Fallback: построчный парсинг plain text страницы
 
         Args:
             team_url: URL страницы команды.
@@ -894,14 +895,28 @@ class SiteParser:
             logger.error("Не удалось загрузить страницу матчей: %s", e)
             return []
 
+        # Стратегия 1: стандартный парсинг контейнера матчей
         matches = self._extract_matches_from_page(soup)
+        if matches:
+            logger.info(
+                "Найдено матчей (стратегия: контейнер): %d", len(matches)
+            )
+            return matches
 
-        # Если стандартные методы не нашли матчей — пробуем
-        # агрессивный парсинг страницы команды
-        if not matches:
-            matches = self._extract_matches_from_team_page(soup)
+        # Стратегия 2: агрессивный парсинг страницы команды
+        matches = self._extract_matches_from_team_page(soup)
+        if matches:
+            logger.info(
+                "Найдено матчей (стратегия: агрессивный): %d", len(matches)
+            )
+        else:
+            logger.warning(
+                "Не удалось найти матчи команды %s ни одним методом. "
+                "Возможно, структура страницы изменилась.",
+                team_url,
+            )
 
-        logger.info("Найдено матчей: %d", len(matches))
+        logger.info("Найдено матчей (всего): %d", len(matches))
         return matches
 
     def _extract_matches_from_team_page(self, soup: BeautifulSoup) -> list[Match]:
@@ -911,6 +926,7 @@ class SiteParser:
         - Строки/блоки с датой + 1-2 ссылки на команды + счёт
         - Секции «Результаты» / «Календарь» / «Расписание»
         - Любой блок, содержащий дату и хотя бы одну ссылку на соперника
+        - Fallback: построчный парсинг текста страницы
 
         Args:
             soup: BeautifulSoup объект.
@@ -935,6 +951,9 @@ class SiteParser:
             "#matches",
             "section.results",
             "section.fixtures",
+            "div.kalendar",
+            "div.raspisanie",
+            "#kalendar",
         ]
 
         sections: list[Tag] = []
@@ -978,7 +997,6 @@ class SiteParser:
                 break
 
             # Стратегия C: Ищем блоки, содержащие дату + ссылку + счёт
-            # Проходим по всем div/li и ищем паттерн матча
             for tag_name in ["div", "li"]:
                 for el in section.find_all(tag_name):
                     match = self._try_parse_match_block(el)
@@ -988,6 +1006,72 @@ class SiteParser:
 
             if matches:
                 break
+
+        # Стратегия D (fallback): построчный парсинг — ищем паттерн
+        # «дата текст команда — команда счёт» в plain text
+        if not matches:
+            matches = self._extract_matches_from_plain_text(soup, seen_ids)
+
+        return matches
+
+    def _extract_matches_from_plain_text(
+        self, soup: BeautifulSoup, seen_ids: set[str]
+    ) -> list[Match]:
+        """Построчный парсинг матчей из plain text страницы.
+
+        Ищет строки, содержащие:
+        - дату (DD.MM.YYYY или DD.MM)
+        - хотя бы одну ссылку на команду
+        - опционально счёт (X:Y или X-Y)
+
+        Args:
+            soup: BeautifulSoup объект.
+            seen_ids: Уже найденные ID матчей.
+
+        Returns:
+            Список объектов Match.
+        """
+        matches: list[Match] = []
+
+        # Берём основной контент
+        content = None
+        for sel in ["div.content", "div.main", "#content", "#main", "article"]:
+            block = soup.select_one(sel)
+            if block:
+                content = block
+                break
+        if content is None:
+            content = soup
+
+        # Ищем таблицы — это наиболее вероятный контейнер матчей
+        for table in content.find_all("table"):
+            if self._is_navigation_table(table):
+                continue
+            for row in table.find_all("tr"):
+                if self._is_navigation_table(row):
+                    continue
+                match = self._parse_match_element(row)
+                if match and match.id not in seen_ids:
+                    matches.append(match)
+                    seen_ids.add(match.id)
+
+        if matches:
+            return matches
+
+        # Fallback: ищем все div-блоки с классами содержащими match/fixture/calendar
+        for tag_name in ["div", "li", "p"]:
+            for el in content.find_all(tag_name):
+                cls = el.get("class", [])
+                cls_str = " ".join(str(c) for c in cls).lower()
+                if any(
+                    kw in cls_str
+                    for kw in ["match", "fixture", "calendar", "game", "result",
+                               "kalendar", "raspisanie", "match-item", "row"]
+                ):
+                    match = self._try_parse_match_block(el)
+                    if match and match.id not in seen_ids:
+                        matches.append(match)
+                        seen_ids.add(match.id)
 
         return matches
 
@@ -1008,18 +1092,18 @@ class SiteParser:
         """
         # Фильтр: слишком много ссылок — это контейнер, не матч
         links = el.find_all("a", href=True)
-        if len(links) > 6:
+        if len(links) > 8:
             return None
 
         # Слишком длинный текст — это не атомарный матч
-        if len(el.get_text()) > 300:
+        if len(el.get_text()) > 400:
             return None
 
         texts = [clean_text(s) for s in el.stripped_strings if clean_text(s)]
         if len(texts) < 2:
             return None
 
-        # Ищем дату
+        # Ищем дату — сначала в самом блоке
         match_date: datetime | None = None
         for text in texts:
             parsed = parse_russian_date(text)
@@ -1027,7 +1111,34 @@ class SiteParser:
                 match_date = parsed
                 break
 
-        # Ищем ссылки-команды
+        # Если не нашли — ищем в родительских заголовках (до 3 уровней)
+        if match_date is None:
+            parent = el.parent
+            depth = 0
+            while parent and depth < 3:
+                for heading in parent.find_all(
+                    ["h3", "h4", "h5", "div", "span"], limit=5
+                ):
+                    cls = heading.get("class", [])
+                    tag = heading.name
+                    if tag in ("h3", "h4", "h5") or any(
+                        c in str(cls).lower()
+                        for c in ("date", "header", "title", "day", "data")
+                    ):
+                        t = clean_text(heading.get_text())
+                        parsed = parse_russian_date(t)
+                        if parsed:
+                            match_date = parsed
+                            break
+                    if parsed_date := parse_russian_date(clean_text(heading.get_text())):
+                        match_date = parsed_date
+                        break
+                if match_date:
+                    break
+                parent = parent.parent
+                depth += 1
+
+        # Ищем ссылки-команды — ослабленный фильтр
         team_links: list[str] = []
         for link in links:
             name = clean_text(link.get_text())
@@ -1037,14 +1148,15 @@ class SiteParser:
             skip = [
                 "tournament", "league", "protocol", "statistic",
                 "stats", "report", "summary", "details", "preview",
-                "standings", "tables", "news", "article", "team/",
+                "standings", "tables", "news", "article",
             ]
-            # team/ — ссылки на другие команды — это ок, но tournament/league — нет
-            skip_without_team = [s for s in skip if s != "team/"]
-            if any(s in href_lower for s in skip_without_team):
+            if any(s in href_lower for s in skip):
                 continue
-            if not name or not _looks_like_team_name(name):
+            if not name or len(name) < 2:
                 continue
+            if _looks_like_score(name):
+                continue
+            # Не отбрасываем через _is_navigation_text — он слишком строг
             team_links.append(name)
 
         # Ищем счёт
@@ -1057,7 +1169,7 @@ class SiteParser:
                 away_score = int(m.group(2))
                 break
 
-        # Валидация: нужна хотя бы 1 команда + (дата или счёт или вторая команда)
+        # Валидация: нужны хотя бы 1-2 команды
         if not team_links:
             return None
 
@@ -1068,10 +1180,14 @@ class SiteParser:
             home_team = team_links[0]
             away_team = team_links[1]
         elif len(team_links) == 1:
-            # Одна команда + счёт — это матч (вторую команду не знаем)
+            # Одна команда + счёт — матч валиден
             if home_score is not None and away_score is not None:
                 home_team = team_links[0]
-                away_team = "—"  # Неизвестный соперник
+                away_team = "—"
+            elif match_date:
+                # Одна команда + дата — тоже валиден как предстоящий матч
+                home_team = team_links[0]
+                away_team = "—"
             else:
                 return None
         else:
@@ -1154,10 +1270,6 @@ class SiteParser:
         Returns:
             Список тегов-контейнеров (может быть пустым).
         """
-        # TODO: Если структура сайта меняется — обновите селекторы.
-        # Откройте страницу команды в браузере, посмотрите CSS-классы
-        # таблицы/блока с матчами и добавьте сюда.
-
         containers: list[Tag] = []
 
         # Приоритет 1: Точные селекторы матчевых блоков
@@ -1176,6 +1288,11 @@ class SiteParser:
             "#results",
             "table.calendar",
             "div.calendar",
+            "div.kalendar",
+            "div.raspisanie",
+            "#calendar",
+            "#kalendar",
+            "table.fixtures-results",
         ]:
             container = soup.select_one(selector)
             if container:
@@ -1185,18 +1302,37 @@ class SiteParser:
             return containers
 
         # Приоритет 2: Любой блок с id/class, содержащим match/fixture/scheduled/results/calendar
-        for pattern in ["match", "fixture", "scheduled", "calendar", "game"]:
+        for pattern in [
+            "match", "fixture", "scheduled", "calendar", "game",
+            "kalendar", "raspisanie", "rezul", "fixtures",
+        ]:
             for tag_name in ["table", "div", "section", "ul"]:
                 for el in soup.find_all(tag_name, id=re.compile(pattern, re.IGNORECASE)):
                     containers.append(el)
-                for el in soup.find_all(tag_name, class_=re.compile(pattern, re.IGNORECASE)):
+                for el in soup.find_all(
+                    tag_name, class_=re.compile(pattern, re.IGNORECASE)
+                ):
                     if el not in containers:
                         containers.append(el)
 
         if containers:
             return containers
 
-        # Приоритет 3: Основной контент страницы — ищем таблицы в нём
+        # Приоритет 3: Ищем секции по заголовкам (h2/h3 с «матч», «календарь» и т.д.)
+        match_keywords = ["матч", "календарь", "расписани", "результат", "fixture"]
+        for keyword in match_keywords:
+            for heading in soup.find_all(["h2", "h3", "h4"]):
+                if keyword in heading.get_text().lower():
+                    # Берём следующий за заголовком элемент — это контейнер
+                    sibling = heading.find_next_sibling()
+                    if sibling and sibling.name in ("table", "div", "section", "ul"):
+                        if sibling not in containers:
+                            containers.append(sibling)
+
+        if containers:
+            return containers
+
+        # Приоритет 4: Основной контент страницы — ищем таблицы в нём
         for selector in ["div.content", "div.main", "#content", "#main", "article"]:
             main_block = soup.select_one(selector)
             if main_block:
@@ -1528,7 +1664,6 @@ class SiteParser:
             Match или None.
         """
         cells = el.find_all(["td", "th"])
-        # Ослаблено: раньше было < 3, теперь < 2
         if len(cells) < 2:
             return None
 
@@ -1542,12 +1677,25 @@ class SiteParser:
                 match_date = parsed
                 break
 
-        # 2. Ищем ссылки на команды
+        # 2. Ищем ссылки на команды — ослабленный фильтр
         links = el.find_all("a", href=True)
-        team_links = []
+        team_links: list[str] = []
         for link in links:
             name = clean_text(link.get_text())
-            if name and not _is_navigation_text(name) and not _looks_like_score(name) and len(name) >= 2:
+            # Ослабленная фильтрация: пропускаем если похоже на команду
+            if name and len(name) >= 2 and not _looks_like_score(name):
+                # Проверяем только явную навигацию
+                lower = name.lower()
+                skip_words = {
+                    "главная", "новости", "турниры", "участники",
+                    "контакты", "о сайте", "поиск", "меню",
+                    "статистика", "таблицы", "результаты",
+                    "home", "news", "tournaments", "tables",
+                    "participants", "contacts", "about",
+                    "протокол", "статистика", "отчёт",
+                }
+                if lower in skip_words:
+                    continue
                 team_links.append(name)
 
         home_team: str = ""
@@ -1556,16 +1704,56 @@ class SiteParser:
         if len(team_links) >= 2:
             home_team = team_links[0]
             away_team = team_links[1]
-        elif len(team_links) == 0:
-            # Нет ссылок — извлекаем из текста
+        elif len(team_links) == 1:
+            # Одна ссылка — пробуем найти вторую команду из текста ячеек
+            home_team = team_links[0]
             candidates = []
             for text in texts:
                 t = text.strip()
-                if not t or _is_navigation_text(t) or _looks_like_score(t):
+                if not t:
+                    continue
+                # Пропускаем даты, счёты, числа, навигацию
+                if parse_russian_date(t):
+                    continue
+                if _looks_like_score(t):
                     continue
                 if re.fullmatch(r"[\d\./\-:]+", t):
                     continue
-                if len(t) >= 2 and re.search(r"[a-zA-Zа-яА-ЯёЁ]", t):
+                if len(t) < 2:
+                    continue
+                # Оставляем только тексты с буквами
+                if re.search(r"[a-zA-Zа-яА-ЯёЁ]", t):
+                    candidates.append(t)
+            if candidates:
+                # Берём первый кандидат, который не совпадает с home_team
+                for c in candidates:
+                    if c.lower() != home_team.lower():
+                        away_team = c
+                        break
+                if not away_team:
+                    # Все кандидаты совпали — значит вторая команда не найдена
+                    # Но если есть счёт — матч всё равно валиден
+                    pass
+            # Если нет второй команды, но есть счёт — всё равно считаем матчем
+            # (away_team останется пустым, обработаем ниже)
+        elif len(team_links) == 0:
+            # Нет ссылок — извлекаем команды из текста
+            candidates = []
+            for text in texts:
+                t = text.strip()
+                if not t:
+                    continue
+                if parse_russian_date(t):
+                    continue
+                if _looks_like_score(t):
+                    continue
+                if re.fullmatch(r"[\d\./\-:]+", t):
+                    continue
+                if len(t) < 2:
+                    continue
+                if _is_navigation_text(t):
+                    continue
+                if re.search(r"[a-zA-Zа-яА-ЯёЁ]", t):
                     candidates.append(t)
             if len(candidates) >= 2:
                 home_team = candidates[0]
@@ -1573,21 +1761,11 @@ class SiteParser:
             else:
                 return None
         else:
-            # 1 ссылка — пробуем дополнить из текста
-            home_team = team_links[0]
-            candidates = []
-            for text in texts:
-                t = text.strip()
-                if not t or _is_navigation_text(t) or _looks_like_score(t):
-                    continue
-                if re.fullmatch(r"[\d\./\-:]+", t):
-                    continue
-                if len(t) >= 2 and re.search(r"[a-zA-Zа-яА-ЯёЁ]", t) and t != home_team:
-                    candidates.append(t)
-            if candidates:
-                away_team = candidates[0]
-            else:
-                return None
+            return None
+
+        if not away_team:
+            # Вторая команда не найдена — матч невалиден
+            return None
 
         if home_team.lower() == away_team.lower():
             return None
@@ -1604,9 +1782,9 @@ class SiteParser:
                 away_score = int(m.group(2))
                 break
 
-        # 4. Если нет даты, но есть счёт — это всё равно матч
+        # 4. Если нет даты и нет счёта — не матч
         if match_date is None and home_score is None and away_score is None:
-            return None  # Нет ни даты, ни счёта — не матч
+            return None
 
         # 5. Определяем статус
         if home_score is not None and away_score is not None:
@@ -1616,7 +1794,7 @@ class SiteParser:
         else:
             status = "scheduled"
 
-        # 5. Генерируем ID — используем дату + команды
+        # 6. Генерируем ID
         date_part = match_date.strftime("%Y%m%d") if match_date else "nodate"
         match_id = f"{home_team}_{away_team}_{date_part}"
 
