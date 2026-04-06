@@ -2,12 +2,23 @@
 
 Этот модуль отвечает за извлечение данных из HTML-страниц сайта.
 Вся логика парсинга изолирована здесь — при изменении структуры сайта
-нужно править только этот файл и selectors_config.py.
+нужно править только этот файл.
 
-TODO: HTML-структура сайта может измениться. При проблемах с парсингом:
-  1. Откройте страницу команды/лиги в браузере.
-  2. Посмотрите реальные CSS-классы таблиц матчей и standings.
-  3. Обновите селекторы в _find_matches_container / _find_standings_table.
+Структура сайта altaifootball.ru:
+  - Главная:              /
+  - Турниры:              /tournaments/
+  - Турнир:               /tournaments/{year}/{tournament_id}/
+  - Команда в турнире:    /tournaments/{year}/{tournament_id}/teams/{team_id}/
+  - Календарь турнира:    /tournaments/{year}/{tournament_id}-NNNN/schedule/
+  - Статистика турнира:   /tournaments/{year}/{tournament_id}/stats/
+  - Протокол матча:       /tournaments/boxscore/{match_id}/
+  - Превью матча:         /tournaments/boxscore/{match_id}/preview/
+  - Общее расписание:     /schedule/
+
+Ключевые CSS-классы таблиц:
+  - Standings/матчи команды:  table_box_row
+  - Общее расписание:         scoreboard
+  - Навигация:                page, site
 """
 
 from __future__ import annotations
@@ -320,10 +331,9 @@ class SiteParser:
     async def get_leagues(self) -> list[League]:
         """Получить список всех лиг / турниров.
 
-        Основной путь: только ссылки с /tournaments/ в URL +
-        строгая проверка через _looks_like_league_name().
-
-        Fallback-пути не должны возвращать мусор.
+        Основной путь: страница /tournaments/ — все ссылки вида
+        /tournaments/{year}/{id}/ извлекаются как лиги.
+        Это самый стабильный источник — сайт сам формирует этот список.
 
         Returns:
             Список объектов League.
@@ -331,7 +341,7 @@ class SiteParser:
         logger.info("Получение списка лиг")
 
         try:
-            html = await self._fetch_page("/")
+            html = await self._fetch_page("/tournaments/")
             soup = self._parse_html(html)
         except SiteParserError as e:
             logger.error("Не удалось загрузить страницу лиг: %s", e)
@@ -340,102 +350,62 @@ class SiteParser:
         leagues: list[League] = []
         seen_urls: set[str] = set()
 
-        # Стратегия 1 (приоритет): ссылки с /tournaments/ — самый надёжный признак
-        for link in soup.find_all("a", href=re.compile(r"/tournaments/", re.IGNORECASE)):
-            league = self._extract_league_from_link(link, seen_urls)
-            if league:
-                leagues.append(league)
-                seen_urls.add(league.url)
+        # Извлекаем ВСЕ ссылки вида /tournaments/{year}/{id}/
+        # Исключаем саму страницу /tournaments/ и вложенные /teams/, /stats/, /schedule/
+        tournament_pattern = re.compile(r"/tournaments/\d+/\d+/$")
 
-        # Стратегия 2: контейнеры лиг (только если стратегия 1 дала 0)
-        if not leagues:
-            for selector in [
-                "div.leagues",
-                "div.tournaments",
-                "ul.leagues-list",
-                "ul.tournaments-list",
-                ".league-list",
-                ".tournament-list",
-            ]:
-                container = soup.select_one(selector)
-                if container:
-                    for link in container.find_all("a", href=True):
-                        league = self._extract_league_from_link(link, seen_urls)
-                        if league:
-                            leagues.append(league)
-                            seen_urls.add(league.url)
-                    if leagues:
-                        break
+        for link in soup.find_all("a", href=tournament_pattern):
+            href = link.get("href", "")
+            text = clean_text(link.get_text())
 
-        # Финальная очистка: дедупликация + повторная проверка имени
-        final: list[League] = []
-        seen_final: set[str] = set()
-        for lg in leagues:
-            if lg.url not in seen_final and _looks_like_league_name(lg.name):
-                final.append(lg)
-                seen_final.add(lg.url)
+            if not text or len(text) < 2:
+                continue
 
-        logger.info("Найдено лиг: %d", len(final))
-        return final
+            abs_url = self._make_absolute_url(href)
+            if abs_url in seen_urls:
+                continue
+            seen_urls.add(abs_url)
 
-    def _extract_league_from_link(self, link: Tag, seen_urls: set[str]) -> Optional[League]:
-        """Извлечь данные лиги из HTML-ссылки.
+            # Извлекаем year и tournament_id из URL
+            # /tournaments/2025/3472/ → year=2025, id=3472
+            m = re.search(r"/tournaments/(\d+)/(\d+)/", href)
+            if not m:
+                continue
 
-        Строгая фильтрация: только ссылки, похожие на турниры.
+            year = m.group(1)
+            league_id = m.group(2)
 
-        Args:
-            link: BeautifulSoup тег <a>.
-            seen_urls: Уже обработанные URL (для дедупликации).
+            leagues.append(League(
+                id=league_id,
+                name=text,
+                url=abs_url,
+                season=year,
+            ))
 
-        Returns:
-            League или None.
-        """
-        href = link.get("href", "")
-        text = clean_text(link.get_text())
-
-        if not href or not text:
-            return None
-
-        # Дедупликация по URL
-        abs_url = self._make_absolute_url(href)
-        if abs_url in seen_urls:
-            return None
-
-        # Главный критерий: текст должен быть похож на название турнира
-        if not _looks_like_league_name(text):
-            return None
-
-        # Дополнительная проверка: URL должен содержать tournament/league/season
-        href_lower = href.lower()
-        url_hints = ["tournament", "league", "season", "turnir", "ligen"]
-        if not any(h in href_lower for h in url_hints):
-            return None
-
-        league_id = self._extract_id_from_url(href)
-        return League(
-            id=league_id,
-            name=text,
-            url=abs_url,
-        )
+        logger.info("Найдено лиг: %d", len(leagues))
+        return leagues
 
     # ========================================================================
     # КОМАНДЫ
     # ========================================================================
 
-    async def get_league_teams(self, league_url: str) -> list[Team]:
+    async def get_league_teams(self, league: League) -> list[Team]:
         """Получить список команд лиги.
 
-        Стратегии (по приоритету):
-        1. Таблица/список команд (селекторы teams/teams-table)
-        2. Турнирная таблица standings — извлекаем команды оттуда
-        3. Ссылки с 'team'/'club'/'command' в href
-        4. Fallback: общие таблицы/списки в основном контенте страницы
-           — извлекаем ссылки, если текст похож на название команды
+        Основной путь: страница турнира содержит таблицу standings
+        (table_box_row) со ссылками на команды вида
+        /tournaments/{year}/{id}/teams/{team_id}/.
+
+        Args:
+            league: Объект лиги.
+
+        Returns:
+            Список объектов Team.
         """
-        logger.info("Получение команд лиги: %s", league_url)
+        logger.info("Получение команд лиги: %s", league.name)
 
         try:
-            html = await self._fetch_page(league_url)
+            html = await self._fetch_page(league.url)
             soup = self._parse_html(html)
         except SiteParserError as e:
             logger.error("Не удалось загрузить страницу команд: %s", e)
@@ -444,138 +414,78 @@ class SiteParser:
         teams: list[Team] = []
         seen_ids: set[str] = set()
 
-        # Стратегия 1: Ищем таблицу команд по конкретным селекторам
-        for selector in [
-            "table.teams-table tbody tr",
-            "table.teams tr",
-            "div.team-item a",
-            "a.team-link",
-        ]:
-            elements = soup.select(selector)
-            for el in elements:
-                team = self._extract_team_from_element(el)
-                if team and team.id not in seen_ids:
-                    teams.append(team)
-                    seen_ids.add(team.id)
+        # Извлекаем year из URL лиги для построения URL команд
+        # URL лиги: /tournaments/{year}/{id}/
+        url_match = re.search(r"/tournaments/(\d+)/(\d+)/", league.url)
+        league_year = url_match.group(1) if url_match else ""
+        league_id_from_url = url_match.group(2) if url_match else league.id
+
+        # Стратегия 1: Ищем таблицу table_box_row — это standings
+        for table in soup.find_all("table", class_="table_box_row"):
+            for row in table.find_all("tr"):
+                link = row.find("a", href=True)
+                if not link:
+                    continue
+
+                href = link.get("href", "")
+                # Проверяем что ссылка ведёт на команду в этом турнире
+                team_m = re.search(r"/tournaments/\d+/\d+/teams/(\d+)/", href)
+                if not team_m:
+                    continue
+
+                team_id = team_m.group(1)
+                if team_id in seen_ids:
+                    continue
+
+                # Название команды — текст ссылки
+                # Формат: "Полимер-МБарнаул" — нужно разделить
+                raw_name = clean_text(link.get_text())
+                team_name = self._split_team_name(raw_name)
+
+                if not team_name or len(team_name) < 2:
+                    continue
+
+                seen_ids.add(team_id)
+                teams.append(Team(
+                    id=team_id,
+                    name=team_name,
+                    url=self._make_absolute_url(href),
+                    league_id=league.id,
+                ))
+
             if teams:
                 break
 
-        # Стратегия 2: Извлекаем команды из турнирной таблицы (standings)
+        # Стратегия 2: Ищем все ссылки на команды в контенте страницы
         if not teams:
-            standings_table = self._find_standings_table(soup)
-            if standings_table:
-                for row in standings_table.find_all("tr"):
-                    team = self._extract_team_from_standing_row(row)
-                    if team and team.id not in seen_ids:
-                        teams.append(team)
-                        seen_ids.add(team.id)
+            team_link_pattern = re.compile(
+                rf"/tournaments/\d+/{re.escape(league_id_from_url)}/teams/(\d+)/"
+            )
+            for link in soup.find_all("a", href=team_link_pattern):
+                href = link.get("href", "")
+                raw_name = clean_text(link.get_text())
+                if not raw_name or len(raw_name) < 2:
+                    continue
 
-        # Стратегия 3: Ищем все ссылки с 'team' или 'club' в href
-        if not teams:
-            for link in soup.find_all("a", href=re.compile(r"(team|club|command)", re.IGNORECASE)):
-                team = self._extract_team_from_element(link)
-                if team and team.id not in seen_ids:
-                    teams.append(team)
-                    seen_ids.add(team.id)
+                team_m = team_link_pattern.search(href)
+                if not team_m:
+                    continue
 
-        # Стратегия 4: Fallback — ищем команды в общих таблицах/списках
-        # в основном контенте, даже если href не содержит team/club
-        if not teams:
-            teams = self._extract_teams_from_content(soup, seen_ids)
+                team_id = team_m.group(1)
+                if team_id in seen_ids:
+                    continue
+
+                seen_ids.add(team_id)
+                team_name = self._split_team_name(raw_name)
+                teams.append(Team(
+                    id=team_id,
+                    name=team_name,
+                    url=self._make_absolute_url(href),
+                    league_id=league.id,
+                ))
 
         logger.info("Найдено команд: %d", len(teams))
         return teams
-
-    def _extract_teams_from_content(
-        self, soup: BeautifulSoup, seen_ids: set[str]
-    ) -> list[Team]:
-        """Извлечь команды из общего контента страницы (fallback).
-
-        Ищет ссылки в таблицах и списках основного контента.
-        Берёт ссылки, если текст похож на название команды
-        (отбрасывает навигацию, счёты, служебные строки).
-
-        Args:
-            soup: BeautifulSoup объект.
-            seen_ids: Уже обработанные ID (для дедупликации).
-
-        Returns:
-            Список объектов Team.
-        """
-        teams: list[Team] = []
-
-        # Ищем в основном контенте страницы
-        content_blocks = []
-        for selector in ["div.content", "div.main", "#content", "#main", "article"]:
-            block = soup.select_one(selector)
-            if block:
-                content_blocks.append(block)
-
-        if not content_blocks:
-            content_blocks = [soup]
-
-        for block in content_blocks:
-            # Ищем в таблицах
-            for table in block.find_all("table"):
-                if self._is_navigation_table(table):
-                    continue
-                for link in table.find_all("a", href=True):
-                    team = self._extract_team_from_generic_link(link)
-                    if team and team.id not in seen_ids:
-                        teams.append(team)
-                        seen_ids.add(team.id)
-
-            # Если команды найдены — останавливаемся
-            if teams:
-                break
-
-            # Ищем в списках (ul, ol)
-            for list_tag in block.find_all(["ul", "ol"]):
-                for link in list_tag.find_all("a", href=True):
-                    team = self._extract_team_from_generic_link(link)
-                    if team and team.id not in seen_ids:
-                        teams.append(team)
-                        seen_ids.add(team.id)
-
-            if teams:
-                break
-
-        return teams
-
-    def _extract_team_from_generic_link(self, link: Tag) -> Optional[Team]:
-        """Извлечь команду из произвольной ссылки.
-
-        Фильтрует ссылки, отбрасывая:
-        - навигацию,
-        - счёты матчей,
-        - служебные страницы,
-        - слишком длинные/короткие тексты.
-
-        Args:
-            link: BeautifulSoup тег <a>.
-
-        Returns:
-            Team или None.
-        """
-        href = link.get("href", "")
-        name = clean_text(link.get_text())
-
-        if not href or not _looks_like_team_name(name):
-            return None
-
-        # Отбрасываем ссылки на служебные страницы
-        href_lower = href.lower()
-        skip_hrefs = ["news", "about", "contact", "help", "login", "search",
-                      "admin", "settings", "profile", "statistics", "calendar"]
-        if any(skip in href_lower for skip in skip_hrefs):
-            return None
-
-        team_id = self._extract_id_from_url(href)
-        return Team(
-            id=team_id,
-            name=name,
-            url=self._make_absolute_url(href),
-        )
 
     def _find_standings_table(self, soup: BeautifulSoup) -> Optional[Tag]:
         """Найти таблицу standings на странице.
@@ -703,6 +613,53 @@ class SiteParser:
             logo_url=logo_url,
         )
 
+    def _split_team_name(self, raw_name: str) -> str:
+        """Разделить слитное название команды.
+
+        На сайте названия часто слиты: "Полимер-МБарнаул", "БияБийск".
+        Нужно разделить название команды и город.
+
+        Эвристика: ищем границу «латиница/дефис + кириллица» или
+        «кириллица + кириллица (город)».
+
+        Args:
+            raw_name: Сырое название команды.
+
+        Returns:
+            Разделённое название.
+        """
+        if not raw_name:
+            return ""
+
+        # Паттерн: команда + город (кириллица + кириллица)
+        # Ищем границу: слово из букв/дефисов/цифр + слово с заглавной кириллицей
+        # Примеры: "Полимер-МБарнаул" → "Полимер-М Барнаул"
+        #          "СШ-Динамо-БарнаулБарнаул" → "СШ-Динамо-Барнаул Барнаул"
+
+        # Стратегия 1: Разделение по границе «строчная/заглавная кириллица»
+        # Ищем позицию где после буквы/дефиса идёт заглавная кириллица
+        m = re.search(r"([a-zA-Zа-яА-ЯёЁё0-9\-])([А-ЯЁ])([а-яё])", raw_name)
+        if m:
+            # Проверяем что это не начало слова (не акроним внутри названия)
+            # "СШ-Динамо" → не разделять, "ДинамоБарнаул" → разделять
+            before = m.group(1)
+            # Если перед заглавной буквой стоит строчная — это граница
+            if before.islower() or before in ("-", "М", ""):
+                return raw_name[:m.start(2)] + " " + raw_name[m.start(2):]
+
+        # Стратегия 2: Разделение по латиница → кириллица
+        m = re.search(r"([a-zA-Z])([а-яА-ЯёЁ])", raw_name)
+        if m:
+            return raw_name[:m.start(2)] + " " + raw_name[m.start(2):]
+
+        # Стратегия 3: Разделение кириллица → латиница (редко)
+        m = re.search(r"([а-яА-ЯёЁ])([a-zA-Z])", raw_name)
+        if m:
+            return raw_name[:m.start(2)] + " " + raw_name[m.start(2):]
+
+        # Не смогли разделить — возвращаем как есть
+        return raw_name
+
     # ========================================================================
     # ТУРНИРНАЯ ТАБЛИЦА
     # ========================================================================
@@ -710,8 +667,8 @@ class SiteParser:
     async def get_league_standings(self, league_url: str) -> list[StandingRow]:
         """Получить турнирную таблицу лиги.
 
-        Находит реальную таблицу standings, парсит только валидные строки.
-        Отбрасывает заголовки, мусор, строки без команды.
+        На странице турнира ищем таблицу class="table_box_row".
+        Формат строк: М | Команда | И | В | Н | П | Р/М | О
 
         Args:
             league_url: URL страницы лиги.
@@ -730,44 +687,29 @@ class SiteParser:
 
         standings: list[StandingRow] = []
 
-        # Стратегия 1: Ищем таблицу с конкретным классом
-        for selector in [
-            "table.standings",
-            "table.standing",
-            "table.table.standings",
-            "table.league-table",
-            "table.tournament-table",
-            "table.table-league",
-            "div.standings table",
-        ]:
-            table = soup.select_one(selector)
-            if table:
-                standings = self._parse_standings_table(table)
-                if standings:
-                    break
+        # Ищем таблицу table_box_row — это guaranteed standings
+        for table in soup.find_all("table", class_="table_box_row"):
+            standings = self._parse_standings_table_box(table)
+            if standings:
+                break
 
-        # Стратегия 2: Ищем любую таблицу, которая содержит строки
-        # с числовыми данными и ссылками на команды
+        # Fallback: ищем любую таблицу с числовыми данными и ссылками
         if not standings:
             for table in soup.find_all("table"):
-                standings = self._parse_standings_table(table)
-                if len(standings) >= 2:  # Минимум 2 команды — это реальная таблица
+                if table.get("class") and ("page" in table.get("class") or "site" in table.get("class")):
+                    continue  # Пропускаем навигацию
+                standings = self._parse_standings_table_box(table)
+                if len(standings) >= 2:
                     break
                 standings = []
-
-        # Финальная фильтрация: убираем строки без нормальных названий
-        standings = [
-            s for s in standings
-            if s.team_name
-            and not _is_navigation_text(s.team_name)
-            and len(s.team_name) >= 2
-        ]
 
         logger.info("Найдено строк в таблице: %d", len(standings))
         return standings
 
-    def _parse_standings_table(self, table: Tag) -> list[StandingRow]:
-        """Распарсить конкретную таблицу как standings.
+    def _parse_standings_table_box(self, table: Tag) -> list[StandingRow]:
+        """Распарсить таблицу class="table_box_row" как standings.
+
+        Формат: М | Команда | И | В | Н | П | Р/М | О
 
         Args:
             table: BeautifulSoup тег <table>.
@@ -777,21 +719,21 @@ class SiteParser:
         """
         standings: list[StandingRow] = []
         rows = table.find_all("tr")
+        if len(rows) < 2:
+            return []
 
-        for row in rows:
-            standing = self._parse_standing_row(row)
+        # Первая строка — заголовок, пропускаем
+        for row in rows[1:]:
+            standing = self._parse_standing_row_box(row)
             if standing:
                 standings.append(standing)
 
         return standings
 
-    def _parse_standing_row(self, row: Tag) -> Optional[StandingRow]:
-        """Распарсить строку турнирной таблицы.
+    def _parse_standing_row_box(self, row: Tag) -> Optional[StandingRow]:
+        """Распарсить строку таблицы standings (table_box_row формат).
 
-        Валидация:
-        - Позиция — число
-        - Команда — непустая строка, не навигация, минимум 2 символа
-        - Минимум 3 ячейки с числами (сыграно, победы, очки или аналог)
+        Формат ячеек: М | Команда(ссылка) | И | В | Н | П | Р/М | О
 
         Args:
             row: Тег <tr>.
@@ -800,57 +742,58 @@ class SiteParser:
             StandingRow или None.
         """
         cells = row.find_all(["td", "th"])
-        if len(cells) < 3:
+        if len(cells) < 5:
             return None
 
-        # Позиция — должна быть числом в первой ячейке
+        # Позиция
         try:
-            position_text = clean_text(cells[0].get_text())
-            position = int(re.sub(r"[^\d]", "", position_text))
+            pos_text = clean_text(cells[0].get_text())
+            position = int(re.sub(r"[^\d]", "", pos_text))
             if position < 1 or position > 200:
-                return None  # Нереалистичная позиция
+                return None
         except (ValueError, IndexError):
             return None
 
-        # Команда — вторая ячейка, обязательна ссылка или текст
+        # Команда — ссылка
         team_cell = cells[1]
-        team_link = team_cell.find("a")
-        team_name = clean_text(team_link.get_text() if team_link else team_cell.get_text())
+        team_link = team_cell.find("a", href=True)
+        raw_name = clean_text(team_link.get_text() if team_link else team_cell.get_text())
         team_url = self._make_absolute_url(team_link.get("href", "")) if team_link else None
+        team_name = self._split_team_name(raw_name)
 
-        # Валидация названия команды
-        if not team_name or _is_navigation_text(team_name) or len(team_name) < 2:
+        if not team_name or len(team_name) < 2:
             return None
 
-        # Числовые данные (игры, победы, ничьи, поражения, голы, очки)
+        # Числовые данные: И В Н П Р/М О
+        # Р/М может быть в формате "86-17"
         numbers: list[int] = []
-        for cell in cells[2:]:
+        goals_for = 0
+        goals_against = 0
+
+        # Ячейки 2+: И, В, Н, П, Р/М, О
+        for i, cell in enumerate(cells[2:]):
             text = clean_text(cell.get_text())
-            nums = re.findall(r"(\d+)", text)
+            # Проверяем на формат голов "86-17"
+            goals_m = re.match(r"^(\d+)\s*[-:]\s*(\d+)$", text)
+            if goals_m:
+                goals_for = int(goals_m.group(1))
+                goals_against = int(goals_m.group(2))
+                continue
+
+            nums = re.findall(r"\d+", text)
             if nums:
                 numbers.extend(int(n) for n in nums)
 
-        # Минимум: played(1), wins(2), draws(3), losses(4), points(N)
-        # Если чисел меньше 3 — строка подозрительна
-        if len(numbers) < 3:
+        # Разбор: И В Н П ... О (очки — последнее число)
+        if len(numbers) < 4:
             return None
 
-        # Разбор в зависимости от количества чисел
-        if len(numbers) >= 7:
-            # Полный формат: И В Н П ГЗ ГП О
-            played, wins, draws, losses = numbers[0], numbers[1], numbers[2], numbers[3]
-            goals_for, goals_against = numbers[4], numbers[5]
-            points = numbers[-1]
-        elif len(numbers) >= 5:
-            # Минимальный: И В Н П О
-            played, wins, draws, losses = numbers[0], numbers[1], numbers[2], numbers[3]
-            goals_for, goals_against = 0, 0
-            points = numbers[-1]
-        else:
-            # Только И В Н — очков нет, пропускаем
-            return None
+        played = numbers[0]
+        wins = numbers[1] if len(numbers) > 1 else 0
+        draws = numbers[2] if len(numbers) > 2 else 0
+        losses = numbers[3] if len(numbers) > 3 else 0
+        points = numbers[-1]  # Последнее число — очки
 
-        # Дополнительная проверка: очки должны быть разумными
         if points < 0 or points > 200:
             return None
 
@@ -874,11 +817,11 @@ class SiteParser:
     async def get_team_matches(self, team_url: str) -> list[Match]:
         """Получить все матчи команды.
 
-        Использует расширенную стратегию для страниц команд:
-        - Стандартный парсинг матчевых таблиц/карточек
-        - Fallback: парсинг компактных строк «дата — соперник — счёт»
-        - Fallback: извлечение матчей из div/li блоков с датами и ссылками
-        - Fallback: построчный парсинг plain text страницы
+        Страница команды на сайте:
+        /tournaments/{year}/{tournament_id}/teams/{team_id}/
+
+        Содержит таблицу class="table_box_row" с форматом:
+        Дата | Этап | Соперник | Счет | | Место
 
         Args:
             team_url: URL страницы команды.
@@ -895,29 +838,261 @@ class SiteParser:
             logger.error("Не удалось загрузить страницу матчей: %s", e)
             return []
 
-        # Стратегия 1: стандартный парсинг контейнера матчей
-        matches = self._extract_matches_from_page(soup)
-        if matches:
-            logger.info(
-                "Найдено матчей (стратегия: контейнер): %d", len(matches)
-            )
-            return matches
+        matches = self._extract_team_matches_from_table_box(soup, team_url)
 
-        # Стратегия 2: агрессивный парсинг страницы команды
-        matches = self._extract_matches_from_team_page(soup)
         if matches:
-            logger.info(
-                "Найдено матчей (стратегия: агрессивный): %d", len(matches)
-            )
+            logger.info("Найдено матчей (table_box_row): %d", len(matches))
         else:
-            logger.warning(
-                "Не удалось найти матчи команды %s ни одним методом. "
-                "Возможно, структура страницы изменилась.",
-                team_url,
+            # Fallback: пробуем общий парсинг страницы
+            matches = self._extract_matches_from_page(soup)
+            logger.info(
+                "Найдено матчей (fallback общий парсинг): %d", len(matches)
             )
+            if not matches:
+                logger.warning(
+                    "Не удалось найти матчи команды %s. "
+                    "Возможно, структура страницы изменилась.",
+                    team_url,
+                )
 
-        logger.info("Найдено матчей (всего): %d", len(matches))
         return matches
+
+    def _extract_team_matches_from_table_box(
+        self, soup: BeautifulSoup, team_url: str
+    ) -> list[Match]:
+        """Извлечь матчи команды из таблицы class="table_box_row".
+
+        Формат строки:
+        Дата | Этап | Соперник | Счет | | Место
+
+        Args:
+            soup: BeautifulSoup объект.
+            team_url: URL страницы команды (для определения home/away).
+
+        Returns:
+            Список объектов Match.
+        """
+        matches: list[Match] = []
+        seen_ids: set[str] = set()
+
+        # Извлекаем ID текущей команды из URL
+        team_id_match = re.search(r"/teams/(\d+)/", team_url)
+        current_team_id = team_id_match.group(1) if team_id_match else None
+
+        # Находим название текущей команды из заголовка страницы
+        current_team_name = self._extract_current_team_name(soup)
+
+        for table in soup.find_all("table", class_="table_box_row"):
+            rows = table.find_all("tr")
+            if len(rows) < 2:
+                continue
+
+            # Первая строка — заголовок: Дата | Этап | Соперник | Счет | | Место
+            # Проверяем что это таблица матчей
+            header_texts = [clean_text(td.get_text()).lower() for td in rows[0].find_all(["td", "th"])]
+            has_date_col = any("дата" in t for t in header_texts)
+            has_opponent_col = any("соперник" in t for t in header_texts)
+            has_score_col = any("счет" in t for t in header_texts)
+
+            if not (has_date_col and has_opponent_col and has_score_col):
+                continue
+
+            # Парсим строки матчей
+            for row in rows[1:]:
+                match = self._parse_team_match_row(row, current_team_name, team_url)
+                if match and match.id not in seen_ids:
+                    matches.append(match)
+                    seen_ids.add(match.id)
+
+            if matches:
+                break
+
+        return matches
+
+    def _extract_current_team_name(self, soup: BeautifulSoup) -> str:
+        """Извлечь название текущей команды из страницы.
+
+        Ищем текст вида '"Полимер-М" Барнаул' или 'СШ №7 Барнаул'
+        рядом со ссылкой "Расписание".
+
+        Args:
+            soup: BeautifulSoup объект.
+
+        Returns:
+            Название команды или пустая строка.
+        """
+        # Ищем ссылку "Расписание" и берём текст перед ней
+        for link in soup.find_all("a", href=True):
+            if "расписание" in link.get_text().lower():
+                # Берём родительский элемент и ищем текст команды
+                parent = link.parent
+                if parent:
+                    text = parent.get_text()
+                    # Ищем текст в кавычках перед "Расписание"
+                    m = re.search(r'"([^"]+)"\s*.*?Расписание', text)
+                    if m:
+                        return m.group(1)
+                    # Или текст до "Расписание"
+                    idx = text.find("Расписание")
+                    if idx > 0:
+                        candidate = text[:idx].strip().rstrip("1234567890 ")
+                        if candidate and len(candidate) >= 2:
+                            return candidate
+
+        return ""
+
+    def _parse_team_match_row(
+        self, row: Tag, current_team_name: str, team_url: str
+    ) -> Optional[Match]:
+        """Распарсить строку матча из таблицы команды.
+
+        Формат: Дата | Этап | Соперник | Счет | | Место
+
+        Args:
+            row: Тег <tr>.
+            current_team_name: Название текущей команды.
+            team_url: URL страницы команды.
+
+        Returns:
+            Match или None.
+        """
+        cells = row.find_all(["td", "th"])
+        if len(cells) < 4:
+            return None
+
+        # Дата — первая ячейка: "17.05.2025,Сб,18:00"
+        date_text = clean_text(cells[0].get_text())
+        match_date = self._parse_team_date(date_text)
+
+        # Этап — вторая: "2 тур"
+        round_text = clean_text(cells[1].get_text()) if len(cells) > 1 else ""
+
+        # Соперник — третья: "СШ №7Барнаул"
+        opponent_raw = clean_text(cells[2].get_text()) if len(cells) > 2 else ""
+        opponent_name = self._split_team_name(opponent_raw)
+
+        # Счёт — четвёртая: "3:1В" (В=выигрыш, Н=ничья, П=проигрыш)
+        score_raw = clean_text(cells[3].get_text()) if len(cells) > 3 else ""
+
+        # Место — последняя: "Дома" или "Выезд"
+        venue_cell = cells[-1] if len(cells) > 4 else None
+        venue_text = clean_text(venue_cell.get_text()) if venue_cell else ""
+        is_home = "дома" in venue_text.lower()
+
+        if not opponent_name or len(opponent_name) < 2:
+            return None
+
+        # Парсим счёт
+        home_score: int | None = None
+        away_score: int | None = None
+        status = "scheduled"
+
+        score_m = re.match(r"^(\d+)\s*[:\-]\s*(\d+)", score_raw)
+        if score_m:
+            home_score = int(score_m.group(1))
+            away_score = int(score_m.group(2))
+            status = "finished"
+        elif "+" in score_raw or "-" in score_raw:
+            # Технический результат "+:-" или "-:+"
+            if "+:-" in score_raw:
+                home_score = None
+                away_score = None
+                status = "finished"
+            elif "-:+" in score_raw:
+                home_score = None
+                away_score = None
+                status = "finished"
+
+        # Определяем кто дома/кто в гостях
+        if is_home:
+            home_team = current_team_name if current_team_name else "—"
+            away_team = opponent_name
+        else:
+            home_team = opponent_name
+            away_team = current_team_name if current_team_name else "—"
+
+        if not home_team or not away_team:
+            return None
+
+        # Если нет счёта и нет даты — не матч
+        if match_date is None and home_score is None:
+            return None
+
+        # Определяем статус если нет счёта
+        if home_score is None and match_date:
+            if match_date < datetime.now():
+                status = "unknown"
+            else:
+                status = "scheduled"
+
+        # Извлекаем стадион из последней ячейки
+        venue = ""
+        if venue_cell:
+            # Стадион может быть в отдельной ячейке или вместе с "Дома"/"Выезд"
+            venue_text_full = clean_text(venue_cell.get_text())
+            # Ищем после "Дома" или "Выезд"
+            for keyword in ["Дома", "Выезд"]:
+                idx = venue_text_full.find(keyword)
+                if idx >= 0:
+                    venue = clean_text(venue_text_full[idx + len(keyword):])
+                    break
+            if not venue:
+                venue = venue_text_full
+
+        # Извлекаем ID команды из URL для генерации match ID
+        team_id_m = re.search(r"/teams/(\d+)/", team_url)
+        team_id_part = team_id_m.group(1) if team_id_m else "unknown"
+
+        date_part = match_date.strftime("%Y%m%d") if match_date else "nodate"
+        match_id = f"{home_team}_{away_team}_{date_part}_{team_id_part}"
+
+        return Match(
+            id=match_id,
+            home_team=home_team,
+            away_team=away_team,
+            match_date=match_date,
+            status=status,
+            home_score=home_score,
+            away_score=away_score,
+            round=round_text if round_text else None,
+            venue=venue if venue else None,
+        )
+
+    def _parse_team_date(self, date_text: str) -> datetime | None:
+        """Распарсить дату из формата страницы команды.
+
+        Формат: "17.05.2025,Сб,18:00" или "17.05.2025"
+
+        Args:
+            date_text: Текст даты.
+
+        Returns:
+            datetime или None.
+        """
+        if not date_text:
+            return None
+
+        # Пробуем формат "DD.MM.YYYY,Дд,HH:MM"
+        m = re.match(r"(\d{2})\.(\d{2})\.(\d{4}),\w+,(\d{2}):(\d{2})", date_text)
+        if m:
+            try:
+                return datetime(
+                    int(m.group(3)), int(m.group(2)),
+                    int(m.group(1)), int(m.group(4)), int(m.group(5))
+                )
+            except ValueError:
+                pass
+
+        # Пробуем "DD.MM.YYYY,Дд" без времени
+        m = re.match(r"(\d{2})\.(\d{2})\.(\d{4}),\w+", date_text)
+        if m:
+            try:
+                return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+            except ValueError:
+                pass
+
+        # Пробуем стандартный парсинг
+        return parse_russian_date(date_text)
 
     def _extract_matches_from_team_page(self, soup: BeautifulSoup) -> list[Match]:
         """Агрессивный парсинг матчей со страницы команды.
@@ -1346,10 +1521,10 @@ class SiteParser:
         """Извлечь матчи со страницы.
 
         Стратегии (по приоритету):
-        1. Контейнер матчей → парсим <tr>
-        2. Таблицы в основном контенте → парсим <tr>
-        3. Матчевые карточки (div.match-card, div.fix-item и т.д.)
-        4. Все таблицы на странице (fallback, с фильтрацией)
+        1. Таблица class="scoreboard" — общее расписание
+        2. Контейнеры матчей через _find_matches_container()
+        3. Матчевые карточки (div.match-card и т.д.)
+        4. Все таблицы на странице (fallback)
 
         Args:
             soup: BeautifulSoup объект.
@@ -1360,7 +1535,12 @@ class SiteParser:
         matches: list[Match] = []
         seen_ids: set[str] = set()
 
-        # Стратегия 1: Конкретные контейнеры матчей → <tr>
+        # Стратегия 1: scoreboard — основное расписание сайта
+        scoreboard_matches = self._extract_scoreboard_matches(soup)
+        if scoreboard_matches:
+            return scoreboard_matches
+
+        # Стратегия 2: Конкретные контейнеры матчей → <tr>
         containers = self._find_matches_container(soup)
         for container in containers:
             for row in container.find_all("tr"):
@@ -1372,12 +1552,12 @@ class SiteParser:
         if matches:
             return matches
 
-        # Стратегия 2: Матчевые карточки (div, li) — без требования <tr>
+        # Стратегия 3: Матчевые карточки (div, li)
         card_matches = self._extract_match_cards(soup)
         if card_matches:
             return card_matches
 
-        # Стратегия 3: Таблицы в основном контенте
+        # Стратегия 4: Таблицы в основном контенте
         for selector in ["div.content", "div.main", "#content", "#main", "article"]:
             main_block = soup.select_one(selector)
             if main_block:
@@ -1393,7 +1573,7 @@ class SiteParser:
         if matches:
             return matches
 
-        # Стратегия 4: Все таблицы на странице (fallback)
+        # Стратегия 5: Все таблицы на странице (fallback)
         for table in soup.find_all("table"):
             if self._is_navigation_table(table):
                 continue
@@ -1402,6 +1582,102 @@ class SiteParser:
                 if match and match.id not in seen_ids:
                     matches.append(match)
                     seen_ids.add(match.id)
+
+        return matches
+
+    def _extract_scoreboard_matches(self, soup: BeautifulSoup) -> list[Match]:
+        """Извлечь матчи из таблицы class="scoreboard".
+
+        Формат: время | home_team | score | away_team | stadium
+
+        Args:
+            soup: BeautifulSoup объект.
+
+        Returns:
+            Список объектов Match.
+        """
+        matches: list[Match] = []
+        seen_ids: set[str] = set()
+
+        for table in soup.find_all("table", class_="scoreboard"):
+            for row in table.find_all("tr"):
+                cells = row.find_all(["td", "th"])
+                if len(cells) < 4:
+                    continue
+
+                # Время: "17:00"
+                time_text = clean_text(cells[0].get_text())
+
+                # Home team — ссылка
+                home_link = cells[1].find("a", href=True)
+                home_name = clean_text(home_link.get_text()) if home_link else clean_text(cells[1].get_text())
+
+                # Score — ссылка на preview/boxscore
+                score_cell = cells[2]
+                score_link = score_cell.find("a", href=True)
+                score_text = clean_text(score_cell.get_text())
+
+                # Away team — ссылка
+                away_link = cells[3].find("a", href=True)
+                away_name = clean_text(away_link.get_text()) if away_link else clean_text(cells[3].get_text())
+
+                # Стадион
+                venue = ""
+                if len(cells) > 4:
+                    venue_cell = cells[4].find("a", href=True)
+                    venue = clean_text(venue_cell.get_text()) if venue_cell else clean_text(cells[4].get_text())
+
+                if not home_name or not away_name or len(home_name) < 2 or len(away_name) < 2:
+                    continue
+
+                # Парсим счёт
+                home_score: int | None = None
+                away_score: int | None = None
+                status = "scheduled"
+
+                score_m = re.match(r"^(\d+)\s*[:\-]\s*(\d+)", score_text)
+                if score_m:
+                    home_score = int(score_m.group(1))
+                    away_score = int(score_m.group(2))
+                    status = "finished"
+
+                # Парсим время — добавляем сегодняшнюю дату
+                match_date: datetime | None = None
+                time_m = re.match(r"(\d{2}):(\d{2})", time_text)
+                if time_m:
+                    now = datetime.now()
+                    match_date = now.replace(
+                        hour=int(time_m.group(1)),
+                        minute=int(time_m.group(2)),
+                        second=0,
+                        microsecond=0
+                    )
+                    if home_score is not None:
+                        status = "finished"
+                    elif match_date < datetime.now():
+                        status = "unknown"
+
+                # Boxscore URL
+                match_url = ""
+                if score_link:
+                    match_url = self._make_absolute_url(score_link.get("href", ""))
+
+                match_id = f"{home_name}_{away_name}_{match_date.strftime('%Y%m%d_%H%M') if match_date else 'nodate'}"
+                if match_id in seen_ids:
+                    continue
+                seen_ids.add(match_id)
+
+                matches.append(Match(
+                    id=match_id,
+                    home_team=self._split_team_name(home_name),
+                    away_team=self._split_team_name(away_name),
+                    match_date=match_date,
+                    status=status,
+                    home_score=home_score,
+                    away_score=away_score,
+                    url=match_url if match_url else None,
+                    venue=venue if venue else None,
+                ))
 
         return matches
 
@@ -1854,14 +2130,14 @@ class SiteParser:
                             teams.append(team)
                             seen_ids.add(team.id)
 
-        # Fallback: ищем через все лиги
+            # Fallback: ищем через все лиги
         if not teams:
             leagues = await self.get_leagues()
             # Проходим по всем лигам (кеширование команд делает повторные
             # поиски быстрыми — данные уже в кеше после первого запроса)
             for league in leagues:
                 try:
-                    league_teams = await self.get_league_teams(league.url)
+                    league_teams = await self.get_league_teams(league)
                     for team in league_teams:
                         if query.lower() in team.name.lower():
                             if team.id not in seen_ids:

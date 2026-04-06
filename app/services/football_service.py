@@ -66,8 +66,8 @@ class FootballService:
             return cached
 
         try:
-            teams = await self._parser.get_league_teams(league.url)
-            # Проставляем league_id
+            teams = await self._parser.get_league_teams(league)
+            # Проставляем league_id (на случай если парсер не проставил)
             for team in teams:
                 team.league_id = league.id
             await cache.set_teams(league.id, teams)
