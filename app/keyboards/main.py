@@ -1,0 +1,235 @@
+"""Клавиатуры главного меню и inline-навигации."""
+
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+
+from app.models.football import League, Team
+
+
+def get_main_keyboard() -> ReplyKeyboardMarkup:
+    """Главная клавиатура (Reply)."""
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="🏆 Лиги"),
+                KeyboardButton(text="🔍 Найти команду"),
+            ],
+            [
+                KeyboardButton(text="📊 Турнирная таблица"),
+                KeyboardButton(text="📅 Ближайшие матчи"),
+            ],
+            [
+                KeyboardButton(text="🔥 Последние результаты"),
+                KeyboardButton(text="📬 Мои подписки"),
+            ],
+            [
+                KeyboardButton(text="❓ Помощь"),
+            ],
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Выберите раздел...",
+    )
+    return keyboard
+
+
+def get_leagues_inline_keyboard(leagues: list[League]) -> InlineKeyboardMarkup:
+    """Inline-клавиатура со списком лиг."""
+    buttons = []
+    for league in leagues:
+        buttons.append([
+            InlineKeyboardButton(
+                text=league.name,
+                callback_data=f"league:{league.id}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="⬅️ Назад в главное меню",
+            callback_data="back_to_main"
+        )
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_league_menu_keyboard(league: League) -> InlineKeyboardMarkup:
+    """Меню выбранной лиги."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="👥 Команды",
+                callback_data=f"league_teams:{league.id}"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="📊 Турнирная таблица",
+                callback_data=f"league_standings:{league.id}"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="📅 Ближайшие матчи",
+                callback_data=f"league_upcoming:{league.id}"
+            ),
+            InlineKeyboardButton(
+                text="🔥 Результаты",
+                callback_data=f"league_results:{league.id}"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data="back_to_main"
+            ),
+        ],
+    ])
+
+
+def get_teams_keyboard(teams: list[Team], league_id: str, page: int = 0) -> InlineKeyboardMarkup:
+    """Клавиатура со списком команд (с пагинацией)."""
+    page_size = 10
+    start = page * page_size
+    end = start + page_size
+    page_teams = teams[start:end]
+
+    buttons = []
+    for team in page_teams:
+        buttons.append([
+            InlineKeyboardButton(
+                text=team.name,
+                callback_data=f"team:{team.id}"
+            )
+        ])
+
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=f"teams_page:{league_id}:{page - 1}"
+        ))
+    if end < len(teams):
+        nav_row.append(InlineKeyboardButton(
+            text="Далее ➡️",
+            callback_data=f"teams_page:{league_id}:{page + 1}"
+        ))
+
+    if nav_row:
+        buttons.append(nav_row)
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="⬅️ К лиге",
+            callback_data=f"league_menu:{league_id}"
+        ),
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_team_menu_keyboard(team: Team, league_id: str, is_subscribed: bool = False) -> InlineKeyboardMarkup:
+    """Меню команды.
+
+    Если league_id пуст (команда из поиска/подписок), кнопки навигации
+    к лиге не добавляются — вместо них «Назад в главное меню».
+    """
+    sub_text = "✅ Отписаться" if is_subscribed else "🔔 Подписаться"
+
+    buttons: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text="📅 Расписание",
+                callback_data=f"team_schedule:{team.id}"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🔥 Результаты",
+                callback_data=f"team_results:{team.id}"
+            ),
+            InlineKeyboardButton(
+                text="📅 Ближайшие",
+                callback_data=f"team_upcoming:{team.id}"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="📊 В таблице",
+                callback_data=f"team_standing:{team.id}"
+            ),
+            InlineKeyboardButton(text=sub_text, callback_data=f"team_subscribe:{team.id}"),
+        ],
+    ]
+
+    if league_id:
+        buttons.append([
+            InlineKeyboardButton(
+                text="⬅️ К командам",
+                callback_data=f"league_teams:{league_id}"
+            ),
+            InlineKeyboardButton(
+                text="⬅️ К лиге",
+                callback_data=f"league_menu:{league_id}"
+            ),
+        ])
+    else:
+        buttons.append([
+            InlineKeyboardButton(
+                text="🏠 Главное меню",
+                callback_data="back_to_main"
+            ),
+        ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_search_results_keyboard(teams: list[Team]) -> InlineKeyboardMarkup:
+    """Клавиатура результатов поиска."""
+    buttons = []
+    for team in teams[:10]:
+        buttons.append([
+            InlineKeyboardButton(
+                text=team.name,
+                callback_data=f"team:{team.id}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data="back_to_main"
+        ),
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_subscriptions_keyboard(subscriptions: list[dict]) -> InlineKeyboardMarkup:
+    """Клавиатура подписок."""
+    buttons = []
+    for sub in subscriptions[:10]:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"\u26BD {sub['team_name']}",
+                callback_data=f"team:{sub['team_id']}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data="back_to_main"
+        ),
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_main_back_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура с переходом в главное меню."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🏠 Главное меню",
+            callback_data="back_to_main"
+        )],
+    ])
