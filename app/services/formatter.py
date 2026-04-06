@@ -129,21 +129,16 @@ class FootballFormatter:
         matches: list[Match],
         title: str = "Матчи",
         max_count: int = 10,
+        show_sections: bool = True,
     ) -> str:
         """Форматировать список матчей.
-
-        Формат вывода:
-        🔴 Завершённые:
-          1. 17.05.2025  Полимер-М — СШ №7  3:1
-             🏟 Стадион "Полимер"
-
-        📅 Предстоящие:
-          2. 25.05.2025 17:00  Урожай — Полимер-М
 
         Args:
             matches: Список матчей.
             title: Заголовок.
             max_count: Максимум матчей в списке.
+            show_sections: Если True — разделять на завершённые/предстоящие.
+                           Если False — плоский список (для ближайших матчей).
 
         Returns:
             Текст для Telegram.
@@ -155,98 +150,119 @@ class FootballFormatter:
                 "Попробуйте проверить позже или выберите другую команду."
             )
 
-        # Разделяем на завершённые и предстоящие
-        finished = [m for m in matches if m.is_finished and m.home_score is not None]
-        upcoming = [m for m in matches if not m.is_finished and m.match_date and m.match_date >= datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)]
-        past_unknown = [m for m in matches if m.status == "unknown" or (m.match_date and m.match_date < datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) and not m.is_finished)]
+        lines: list[str] = [f"📅 <b>{escape_html(title)}</b>\n"]
 
-        lines: list[str] = [f"📅 <b>{escape_html(title)}</b>"]
+        if not show_sections:
+            # Плоский список — все матчи по порядку
+            for i, match in enumerate(matches[:max_count], 1):
+                lines.append(FootballFormatter._format_single_match(match, index=i))
+            if len(matches) > max_count:
+                lines.append(f"\n… и ещё {len(matches) - max_count} {pluralize_matches(len(matches) - max_count)}")
+            return "\n".join(lines)
+
+        # С секциями: завершённые → предстоящие
+        finished = [m for m in matches if m.is_finished and m.home_score is not None]
+        upcoming = [
+            m for m in matches
+            if not m.is_finished and (m.match_date is None or m.match_date >= datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+        ]
+        past_unknown = [
+            m for m in matches
+            if (m.status == "unknown") or (m.match_date and m.match_date < datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) and not m.is_finished)
+        ]
 
         total_shown = 0
 
         # Завершённые
         if finished:
-            lines.append(f"\n🔴 <b>Завершённые</b>")
+            lines.append(f"🔴 <b>Завершённые</b>")
             for match in finished[:max_count]:
-                entry = FootballFormatter._format_single_match(match)
-                lines.append(entry)
+                lines.append(FootballFormatter._format_single_match(match, index=None))
                 total_shown += 1
+            lines.append("")
 
         # Неизвестные / прошедшие без счёта
         if past_unknown and total_shown < max_count:
             remaining = max_count - total_shown
-            lines.append(f"\n❓ <b>Без результата</b>")
+            lines.append(f"❓ <b>Без результата</b>")
             for match in past_unknown[:remaining]:
-                entry = FootballFormatter._format_single_match(match)
-                lines.append(entry)
+                lines.append(FootballFormatter._format_single_match(match, index=None))
                 total_shown += 1
+            lines.append("")
 
         # Предстоящие
         if upcoming and total_shown < max_count:
             remaining = max_count - total_shown
-            lines.append(f"\n📅 <b>Предстоящие</b>")
+            lines.append(f"📅 <b>Предстоящие</b>")
             for match in upcoming[:remaining]:
-                entry = FootballFormatter._format_single_match(match)
-                lines.append(entry)
+                lines.append(FootballFormatter._format_single_match(match, index=None))
                 total_shown += 1
+            lines.append("")
 
         # Если ничего не разделилось — выводим всё подряд
         if total_shown == 0:
             for match in matches[:max_count]:
-                entry = FootballFormatter._format_single_match(match)
-                lines.append(entry)
+                lines.append(FootballFormatter._format_single_match(match, index=None))
                 total_shown += 1
 
         if len(matches) > max_count:
-            lines.append(f"\n… и ещё {len(matches) - max_count} {pluralize_matches(len(matches) - max_count)}")
+            lines.append(f"… и ещё {len(matches) - max_count} {pluralize_matches(len(matches) - max_count)}")
 
         return "\n".join(lines)
 
     @staticmethod
-    def _format_single_match(match: Match) -> str:
+    def _format_single_match(match: Match, index: int | None = None) -> str:
         """Форматировать один матч в читаемую строку.
 
         Args:
             match: Объект матча.
+            index: Номер для нумерованного списка (None — без номера).
 
         Returns:
             Строка текста для Telegram.
         """
+        prefix = f"{index}. " if index else "  "
         home = escape_html(match.home_team)
         away = escape_html(match.away_team)
 
         if match.is_finished and match.home_score is not None:
-            # 17.05.2025  Полимер-М — СШ №7  3:1
+            # Завершённый: 05.04.2026 — GM SPORT 22 Барнаул 2:1 Соперник
             date_part = format_date_short(match.match_date)
             score = f"<b>{match.home_score}:{match.away_score}</b>"
-            line = f"  {date_part}  {home} — {away}  {score}"
+            line = f"{prefix}{date_part} — {home} {score} {away}"
+            extras = []
             if match.venue:
-                line += f"\n     🏟 {escape_html(match.venue)}"
+                extras.append(f"🏟 {escape_html(match.venue)}")
             if match.round:
-                line += f" ({escape_html(match.round)})"
+                extras.append(escape_html(match.round))
+            if extras:
+                line += "\n     " + "  •  ".join(extras)
             return line
 
         elif match.is_live:
             score = f"{match.home_score}:{match.away_score}" if match.home_score is not None else "?:?"
-            return f"  🔴 LIVE  {home} — {away}  <b>{score}</b>"
+            return f"{prefix}🔴 LIVE — {home} {score} {away}"
 
         elif match.status == "unknown":
             date_part = format_date_short(match.match_date)
-            return f"  {date_part}  {home} — {away}"
+            return f"{prefix}{date_part} — {home} — {away}"
 
         else:
-            # Предстоящий: 25.05.2025 17:00  Урожай — Полимер-М
+            # Предстоящий: 12.04.2026 18:00 — GM SPORT 22 Барнаул — Соперник
             if match.match_date:
                 date_part = format_date_short(match.match_date)
                 time_part = match.match_date.strftime("%H:%M")
-                line = f"  {date_part} {time_part}  {home} — {away}"
+                line = f"{prefix}{date_part} {time_part} — {home} — {away}"
+                extras = []
                 if match.venue:
-                    line += f"\n     📍 {escape_html(match.venue)}"
+                    extras.append(f"🏟 {escape_html(match.venue)}")
                 if match.round:
-                    line += f" ({escape_html(match.round)})"
+                    extras.append(escape_html(match.round))
+                if extras:
+                    line += "\n     " + "  •  ".join(extras)
                 return line
             else:
-                return f"  {home} — {away}"
+                return f"{prefix}{home} — {away}"
 
     @staticmethod
     def format_match_detail(match: Match) -> str:

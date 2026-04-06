@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 from app.logger import logger
@@ -118,16 +119,30 @@ class FootballService:
     async def get_team_upcoming_matches(self, team: Team) -> list[Match]:
         """Получить предстоящие матчи команды.
 
-        Делегирует парсеру — тот сам фильтрует по дате.
+        Только матчи без счёта, у которых дата в будущем
+        или статус scheduled.
         """
-        return await self._parser.get_team_upcoming_matches(team.url)
+        all_matches = await self.get_team_matches(team)
+        now = datetime.now()
+        upcoming = [
+            m for m in all_matches
+            if m.home_score is None  # Нет счёта — значит не завершён
+            and (m.match_date is None or m.match_date >= now)
+            and m.status != "finished"
+        ]
+        return sorted(upcoming, key=lambda m: m.match_date or datetime.max)
 
     async def get_team_recent_results(self, team: Team) -> list[Match]:
         """Получить последние результаты команды.
 
-        Делегирует парсеру — тот сам фильтрует по дате.
+        Только завершённые матчи — со счётом или статусом finished.
         """
-        return await self._parser.get_team_recent_results(team.url)
+        all_matches = await self.get_team_matches(team)
+        results = [
+            m for m in all_matches
+            if m.is_finished or (m.home_score is not None and m.away_score is not None)
+        ]
+        return sorted(results, key=lambda m: m.match_date or datetime.min, reverse=True)
 
     async def get_team_position_in_table(self, team: Team, league: Optional[League] = None) -> Optional[StandingRow]:
         """Получить позицию команды в таблице.
