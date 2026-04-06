@@ -146,15 +146,32 @@ async def handle_search_button(message: Message, state: FSMContext) -> None:
     )
 
 
+# Тексты кнопок главного меню — fallback не должен их перехватывать,
+# т.к. их обрабатывают хендлеры в leagues.py (и start.py).
+_MENU_BUTTON_TEXTS = {
+    "🏆 Лиги",
+    "🔍 Найти команду",
+    "📊 Турнирная таблица",
+    "📅 Ближайшие матчи",
+    "🔥 Последние результаты",
+    "📬 Мои подписки",
+    "❓ Помощь",
+}
+
+
 @router.message(F.text == "❓ Помощь")
 async def handle_help_button(message: Message) -> None:
     """Кнопка «Помощь»."""
     await cmd_help(message)
 
 
-@router.message(MainStates.idle)
+@router.message(MainStates.idle, ~F.text.in_(_MENU_BUTTON_TEXTS))
 async def handle_unknown_text(message: Message) -> None:
-    """Fallback — неизвестная команда в idle-состоянии."""
+    """Fallback — неизвестная команда в idle-состоянии.
+
+    Не срабатывает на тексты кнопок главного меню — их обрабатывают
+    специализированные хендлеры (в start.py и leagues.py).
+    """
     await message.answer(
         "Неизвестная команда. Используйте кнопки ниже:",
         reply_markup=get_main_keyboard(),
