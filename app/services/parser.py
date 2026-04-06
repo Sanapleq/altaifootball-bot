@@ -874,6 +874,11 @@ class SiteParser:
     async def get_team_matches(self, team_url: str) -> list[Match]:
         """Получить все матчи команды.
 
+        Использует расширенную стратегию для страниц команд:
+        - Стандартный парсинг матчевых таблиц/карточек
+        - Fallback: парсинг компактных строк «дата — соперник — счёт»
+        - Fallback: извлечение матчей из div/li блоков с датами и ссылками
+
         Args:
             team_url: URL страницы команды.
 
@@ -890,8 +895,211 @@ class SiteParser:
             return []
 
         matches = self._extract_matches_from_page(soup)
+
+        # Если стандартные методы не нашли матчей — пробуем
+        # агрессивный парсинг страницы команды
+        if not matches:
+            matches = self._extract_matches_from_team_page(soup)
+
         logger.info("Найдено матчей: %d", len(matches))
         return matches
+
+    def _extract_matches_from_team_page(self, soup: BeautifulSoup) -> list[Match]:
+        """Агрессивный парсинг матчей со страницы команды.
+
+        Ищет паттерны:
+        - Строки/блоки с датой + 1-2 ссылки на команды + счёт
+        - Секции «Результаты» / «Календарь» / «Расписание»
+        - Любой блок, содержащий дату и хотя бы одну ссылку на соперника
+
+        Args:
+            soup: BeautifulSoup объект.
+
+        Returns:
+            Список объектов Match.
+        """
+        matches: list[Match] = []
+        seen_ids: set[str] = set()
+
+        # Определяем контекст страницы — ищем секции с матчами
+        section_selectors = [
+            "div.results",
+            "div.fixtures",
+            "div.calendar",
+            "div.matches",
+            "div.scheduled",
+            "div.fixtures-results",
+            "#results",
+            "#fixtures",
+            "#calendar",
+            "#matches",
+            "section.results",
+            "section.fixtures",
+        ]
+
+        sections: list[Tag] = []
+        for sel in section_selectors:
+            sections.extend(soup.select(sel))
+
+        # Если специфичные секции не найдены — берём основной контент
+        if not sections:
+            for sel in ["div.content", "div.main", "#content", "#main", "article"]:
+                block = soup.select_one(sel)
+                if block:
+                    sections.append(block)
+
+        if not sections:
+            sections = [soup]
+
+        # Ищем матчевые паттерны внутри секций
+        for section in sections:
+            # Стратегия A: таблицы внутри секции
+            for table in section.find_all("table"):
+                if self._is_navigation_table(table):
+                    continue
+                for row in table.find_all("tr"):
+                    match = self._parse_match_element(row)
+                    if match and match.id not in seen_ids:
+                        matches.append(match)
+                        seen_ids.add(match.id)
+
+            if matches:
+                break
+
+            # Стратегия B: div/li блоки внутри секции — ищем матчевые карточки
+            for tag_name in ["div", "li", "tr"]:
+                for el in section.find_all(tag_name):
+                    match = self._parse_match_element(el)
+                    if match and match.id not in seen_ids:
+                        matches.append(match)
+                        seen_ids.add(match.id)
+
+            if matches:
+                break
+
+            # Стратегия C: Ищем блоки, содержащие дату + ссылку + счёт
+            # Проходим по всем div/li и ищем паттерн матча
+            for tag_name in ["div", "li"]:
+                for el in section.find_all(tag_name):
+                    match = self._try_parse_match_block(el)
+                    if match and match.id not in seen_ids:
+                        matches.append(match)
+                        seen_ids.add(match.id)
+
+            if matches:
+                break
+
+        return matches
+
+    def _try_parse_match_block(self, el: Tag) -> Optional[Match]:
+        """Попытаться распознать блок как матч.
+
+        Критерии:
+        - Есть дата (в блоке или родительском заголовке)
+        - Есть хотя бы 1 ссылка на команду (не навигация)
+        - Есть счёт ИЛИ ещё одна ссылка на команду
+        - Не слишком много ссылок (не контейнер списка)
+
+        Args:
+            el: BeautifulSoup тег.
+
+        Returns:
+            Match или None.
+        """
+        # Фильтр: слишком много ссылок — это контейнер, не матч
+        links = el.find_all("a", href=True)
+        if len(links) > 6:
+            return None
+
+        # Слишком длинный текст — это не атомарный матч
+        if len(el.get_text()) > 300:
+            return None
+
+        texts = [clean_text(s) for s in el.stripped_strings if clean_text(s)]
+        if len(texts) < 2:
+            return None
+
+        # Ищем дату
+        match_date: datetime | None = None
+        for text in texts:
+            parsed = parse_russian_date(text)
+            if parsed:
+                match_date = parsed
+                break
+
+        # Ищем ссылки-команды
+        team_links: list[str] = []
+        for link in links:
+            name = clean_text(link.get_text())
+            href_lower = link.get("href", "").lower()
+
+            # Пропускаем навигацию и служебные ссылки
+            skip = [
+                "tournament", "league", "protocol", "statistic",
+                "stats", "report", "summary", "details", "preview",
+                "standings", "tables", "news", "article", "team/",
+            ]
+            # team/ — ссылки на другие команды — это ок, но tournament/league — нет
+            skip_without_team = [s for s in skip if s != "team/"]
+            if any(s in href_lower for s in skip_without_team):
+                continue
+            if not name or not _looks_like_team_name(name):
+                continue
+            team_links.append(name)
+
+        # Ищем счёт
+        home_score: int | None = None
+        away_score: int | None = None
+        for text in texts:
+            m = re.match(r"^(\d+)\s*[:\-]\s*(\d+)$", text)
+            if m:
+                home_score = int(m.group(1))
+                away_score = int(m.group(2))
+                break
+
+        # Валидация: нужна хотя бы 1 команда + (дата или счёт или вторая команда)
+        if not team_links:
+            return None
+
+        home_team: str = ""
+        away_team: str = ""
+
+        if len(team_links) >= 2:
+            home_team = team_links[0]
+            away_team = team_links[1]
+        elif len(team_links) == 1:
+            # Одна команда + счёт — это матч (вторую команду не знаем)
+            if home_score is not None and away_score is not None:
+                home_team = team_links[0]
+                away_team = "—"  # Неизвестный соперник
+            else:
+                return None
+        else:
+            return None
+
+        if home_team == away_team:
+            return None
+
+        # Определяем статус
+        if home_score is not None and away_score is not None:
+            status = "finished"
+        elif match_date and match_date < datetime.now():
+            status = "unknown"
+        else:
+            status = "scheduled"
+
+        date_part = match_date.strftime("%Y%m%d") if match_date else "nodate"
+        match_id = f"{home_team}_{away_team}_{date_part}"
+
+        return Match(
+            id=match_id,
+            home_team=home_team,
+            away_team=away_team,
+            match_date=match_date,
+            status=status,
+            home_score=home_score,
+            away_score=away_score,
+        )
 
     async def get_team_upcoming_matches(self, team_url: str) -> list[Match]:
         """Получить предстоящие матчи команды."""

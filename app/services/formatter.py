@@ -147,37 +147,34 @@ class FootballFormatter:
         lines = [f"📅 <b>{escape_html(title)}</b>\n"]
 
         for i, match in enumerate(matches[:max_count], 1):
-            date_str = format_relative_date(match.match_date)
             home = escape_html(match.home_team)
             away = escape_html(match.away_team)
-
-            if match.is_finished and match.home_score is not None:
-                # Завершённый матч: 12.04  Команда A — Команда B  2:1
-                score = f" <b>{match.home_score}:{match.away_score}</b>"
-            elif match.is_live:
-                score = " 🔴 LIVE"
-            elif match.status == "unknown":
-                # Матч в прошлом, но результат неизвестен
-                score = f" • {format_date_short(match.match_date)}"
-            else:
-                # Будущий матч: 12.04 18:00  Команда A — Команда B
-                if match.match_date:
-                    time_str = match.match_date.strftime(" %H:%M")
-                    score = f" {format_date_short(match.match_date)}{time_str}"
-                else:
-                    score = f" {format_date_short(match.match_date)}"
-
             league_tag = f" [{escape_html(match.league_name)}]" if match.league_name else ""
 
-            # Формируем строку с разделителем «—» между командами
             if match.is_finished and match.home_score is not None:
-                # Завершённый: дата  Команда A — Команда B  2:1
-                lines.append(f"{i}. {date_str}{league_tag}  {home} — {away}{score}")
+                # 05.04 — Команда A — Команда B  2:1
+                date_part = format_date_short(match.match_date)
+                lines.append(
+                    f"{i}. {date_part} — {home} — {away}{league_tag}  <b>{match.home_score}:{match.away_score}</b>"
+                )
+            elif match.is_live:
+                # 🔴 LIVE — Команда A — Команда B  1:0
+                score = f"{match.home_score}:{match.away_score}" if match.home_score is not None else "?:?"
+                lines.append(
+                    f"{i}. 🔴 LIVE — {home} — {away}{league_tag}  <b>{score}</b>"
+                )
             elif match.status == "unknown":
-                lines.append(f"{i}. {date_str}{league_tag}  {home}{score} — {away}")
+                # Дата в прошлом, но нет счёта
+                date_part = format_date_short(match.match_date)
+                lines.append(f"{i}. {date_part} — {home} — {away}{league_tag}")
             else:
-                # Будущий: дата время  Команда A — Команда B
-                lines.append(f"{i}. {score}{league_tag}  {home} — {away}")
+                # Будущий матч: 12.04 18:00 — Команда A — Команда B
+                if match.match_date:
+                    date_part = format_date_short(match.match_date)
+                    time_part = match.match_date.strftime(" %H:%M")
+                    lines.append(f"{i}. {date_part}{time_part} — {home} — {away}{league_tag}")
+                else:
+                    lines.append(f"{i}. {home} — {away}{league_tag}")
 
         if len(matches) > max_count:
             lines.append(f"\n... и ещё {len(matches) - max_count} {pluralize_matches(len(matches) - max_count)}")
@@ -218,7 +215,7 @@ class FootballFormatter:
             score = f"{match.home_score}:{match.away_score}" if match.home_score is not None else "?:?"
             lines.append(f"   🔴 <b>{home} {score} {away}</b>")
         else:
-            lines.append(f"   {home}  vs  {away}")
+            lines.append(f"   {home}  —  {away}")
 
         return "\n".join(lines)
 
@@ -228,7 +225,11 @@ class FootballFormatter:
 
     @staticmethod
     def format_standings(standings: list[StandingRow], league_name: str) -> str:
-        """Форматировать турнирную таблицу.
+        """Форматировать турнирную таблицу в читаемом виде для Telegram.
+
+        Формат вывода (по две строки на команду):
+            1. Динамо Барнаул — 9 очков
+               И: 3  В: 3  Н: 0  П: 0  Голы: 21-6 (+15)
 
         Args:
             standings: Список строк таблицы.
@@ -238,28 +239,34 @@ class FootballFormatter:
             Текст для Telegram.
         """
         if not standings:
-            return f"📊 <b>{escape_html(league_name)}</b>\n\n😔 Не удалось загрузить турнирную таблицу."
+            return (
+                f"📊 <b>{escape_html(league_name)}</b>\n\n"
+                "😔 Не удалось загрузить турнирную таблицу."
+            )
 
         name_escaped = escape_html(league_name)
         lines = [f"🏆 <b>Турнирная таблица: {name_escaped}</b>\n"]
 
-        # Формат: № Команда И В Н П Мячи О
-        header = f"{'#':>2} {'Команда':<25} {'И':>2} {'В':>2} {'Н':>2} {'П':>2} {'Мячи':>8} {'О':>2}"
-        lines.append(f"<code>{header}</code>")
-        lines.append("—" * 55)
-
         for row in standings:
-            team = truncate(escape_html(row.team_name), 25)
-            gd = row.goal_difference
-            gd_str = f"+{gd}" if gd > 0 else str(gd)
-            goals = f"{row.goals_for}-{row.goals_against} ({gd_str})" if row.goals_for or row.goals_against else f"{row.goals_for}-{row.goals_against}"
+            # Аккуратная обрезка длинных названий — 40 символов достаточно
+            team = truncate(escape_html(row.team_name), 40)
+            pts = row.points
+            pt_word = pluralize_points(pts)
 
-            line = (
-                f"{row.position:>2} {team:<25} "
-                f"{row.played:>2} {row.wins:>2} {row.draws:>2} {row.losses:>2} "
-                f"{goals:>12} {row.points:>2}"
-            )
-            lines.append(f"<code>{line}</code>")
+            # Первая строка: место, название, очки
+            lines.append(f"{row.position}. {team} — <b>{pts}</b> {pt_word}")
+
+            # Вторая строка: статистика (с отступом)
+            gd = row.goal_difference
+            gd_str = f" +{gd}" if gd > 0 else (f" {gd}" if gd < 0 else "")
+            goals = f"{row.goals_for}-{row.goals_against}{gd_str}"
+
+            stats = f"   И: {row.played}  В: {row.wins}  Н: {row.draws}  П: {row.losses}  Голы: {goals}"
+            lines.append(stats)
+
+            # Разделитель между командами (кроме последней)
+            if row.position < len(standings):
+                lines.append("")
 
         return "\n".join(lines)
 
