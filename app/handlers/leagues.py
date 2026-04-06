@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 import app.dependencies as deps
 from app.keyboards.callbacks import parse_callback, parse_callback_multi
@@ -19,6 +21,7 @@ from app.keyboards.main import (
     get_main_keyboard,
     get_search_results_keyboard,
     get_subscriptions_keyboard,
+    get_team_back_keyboard,
     get_team_menu_keyboard,
     get_teams_keyboard,
 )
@@ -113,6 +116,39 @@ async def _get_team_from_state_or_search(
 
     # Иначе ищем по ID (может быть другая команда)
     return await _find_team_by_id(team_id)
+
+
+def _get_team_back_kb(team: Team | None) -> InlineKeyboardMarkup:
+    """Клавиатура «Назад» для экранов команды.
+
+    Берёт league_id из team.league_id и показывает:
+      «⬅️ Назад к команде»  |  «🏠 Главное меню»
+    [+ «⬅️ К лиге» если league_id известен]
+    """
+    league_id = team.league_id if team else ""
+    return get_team_back_keyboard(league_id or "")
+
+
+@router.callback_query(F.data == "back_to_team")
+async def cb_back_to_team(callback: CallbackQuery, state: FSMContext) -> None:
+    """Вернуться к карточке текущей команды."""
+    state_data = await state.get_data()
+    team: Team | None = state_data.get("selected_team")
+    league_id = state_data.get("selected_league_id", "")
+
+    if team is None:
+        await callback.answer("Команда не найдена в кэше", show_alert=True)
+        return
+
+    is_subscribed = await deps.sub_repo.is_subscribed(callback.from_user.id, team.id)
+    standing = await deps.football_service.get_team_position_in_table(team)
+
+    await _safe_edit_text(
+        callback,
+        FootballFormatter.format_team_card(team, standing),
+        reply_markup=get_team_menu_keyboard(team, league_id or "", is_subscribed),
+    )
+    await callback.answer()
 
 
 # ── Навигация: главное меню ────────────────────────────────────────
@@ -342,17 +378,19 @@ async def cb_team_schedule(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.message.answer(
             f"📅 <b>Расписание: {team.name}</b>\n\n"
             "Матчей пока нет или не удалось загрузить данные.",
-            reply_markup=get_main_back_keyboard(),
+            reply_markup=_get_team_back_kb(team),
         )
         await callback.answer()
         return
 
+    # Расписание — все матчи, хронологически, с секциями
+    all_sorted = sorted(matches, key=lambda m: m.match_date or datetime.max)
     await _safe_edit_text(
         callback,
         FootballFormatter.format_matches_list(
-            matches, f"Расписание: {team.name}", max_count=15
+            all_sorted, f"Расписание: {team.name}", max_count=20, show_sections=True
         ),
-        reply_markup=get_main_back_keyboard(),
+        reply_markup=_get_team_back_kb(team),
     )
     await callback.answer()
 
@@ -369,10 +407,22 @@ async def cb_team_upcoming(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     matches = await deps.football_service.get_team_upcoming_matches(team)
+    if not matches:
+        await callback.message.answer(
+            f"📅 <b>Ближайшие матчи: {team.name}</b>\n\n"
+            "Предстоящих матчей пока нет.",
+            reply_markup=_get_team_back_kb(team),
+        )
+        await callback.answer()
+        return
+
+    # Ближайшие — плоский список, без секций
     await _safe_edit_text(
         callback,
-        FootballFormatter.format_matches_list(matches, f"Ближайшие матчи: {team.name}"),
-        reply_markup=get_main_back_keyboard(),
+        FootballFormatter.format_matches_list(
+            matches, f"Ближайшие матчи: {team.name}", max_count=15, show_sections=False
+        ),
+        reply_markup=_get_team_back_kb(team),
     )
     await callback.answer()
 
@@ -389,12 +439,22 @@ async def cb_team_results(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     results = await deps.football_service.get_team_recent_results(team)
+    if not results:
+        await callback.message.answer(
+            f"🔥 <b>Последние результаты: {team.name}</b>\n\n"
+            "Завершённых матчей пока нет.",
+            reply_markup=_get_team_back_kb(team),
+        )
+        await callback.answer()
+        return
+
+    # Результаты — плоский список, без секций
     await _safe_edit_text(
         callback,
         FootballFormatter.format_matches_list(
-            results, f"Последние результаты: {team.name}"
+            results, f"Последние результаты: {team.name}", max_count=15, show_sections=False
         ),
-        reply_markup=get_main_back_keyboard(),
+        reply_markup=_get_team_back_kb(team),
     )
     await callback.answer()
 

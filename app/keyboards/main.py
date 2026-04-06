@@ -233,3 +233,34 @@ def get_main_back_keyboard() -> InlineKeyboardMarkup:
             callback_data="back_to_main"
         )],
     ])
+
+
+def get_team_back_keyboard(league_id: str) -> InlineKeyboardMarkup:
+    """Клавиатура «Назад» для экранов команды (расписание, результаты, ближайшие).
+
+    Если league_id известен — показывает обе кнопки:
+      «⬅️ Назад к команде»  |  «🏠 Главное меню»
+    Если league_id пуст — только главное меню.
+    """
+    buttons: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text="⬅️ Назад к команде",
+                callback_data="back_to_team"
+            ),
+            InlineKeyboardButton(
+                text="🏠 Главное меню",
+                callback_data="back_to_main"
+            ),
+        ],
+    ]
+
+    if league_id:
+        buttons.append([
+            InlineKeyboardButton(
+                text="⬅️ К лиге",
+                callback_data=f"league_menu:{league_id}"
+            ),
+        ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
