@@ -29,7 +29,7 @@ from app.logger import logger
 from app.models.football import League, Team
 from app.services.formatter import FootballFormatter
 from app.states import MainStates, SearchStates
-from app.utils.text import pluralize_points
+from app.utils.text import escape_html
 
 router = Router()
 
@@ -346,12 +346,19 @@ async def cb_select_team(callback: CallbackQuery, state: FSMContext) -> None:
     )
     await state.set_state(MainStates.viewing_team)
 
+    # Получаем название лиги для карточки
+    league_name = None
+    if league_id:
+        league = await deps.football_service.get_league_by_id(league_id)
+        if league:
+            league_name = league.name
+
     standing = await deps.football_service.get_team_position_in_table(team)
 
     await _safe_edit_text(
         callback,
-        FootballFormatter.format_team_card(team, standing),
-        reply_markup=get_team_menu_keyboard(team, league_id, is_subscribed),
+        FootballFormatter.format_team_card(team, standing, league_name=league_name),
+        reply_markup=get_team_menu_keyboard(team, league_id or "", is_subscribed),
     )
     await callback.answer()
     logger.info(
@@ -376,7 +383,7 @@ async def cb_team_schedule(callback: CallbackQuery, state: FSMContext) -> None:
     matches = await deps.football_service.get_team_matches(team)
     if not matches:
         await callback.message.answer(
-            f"📅 <b>Расписание: {team.name}</b>\n\n"
+            f"🗓 <b>Расписание</b>\n{escape_html(team.name)}\n\n"
             "Матчей пока нет или не удалось загрузить данные.",
             reply_markup=_get_team_back_kb(team),
         )
@@ -388,7 +395,11 @@ async def cb_team_schedule(callback: CallbackQuery, state: FSMContext) -> None:
     await _safe_edit_text(
         callback,
         FootballFormatter.format_matches_list(
-            all_sorted, f"Расписание: {team.name}", max_count=20, show_sections=True
+            all_sorted,
+            title="🗓 Расписание",
+            team_name=team.name,
+            max_count=20,
+            show_sections=True,
         ),
         reply_markup=_get_team_back_kb(team),
     )
@@ -409,7 +420,7 @@ async def cb_team_upcoming(callback: CallbackQuery, state: FSMContext) -> None:
     matches = await deps.football_service.get_team_upcoming_matches(team)
     if not matches:
         await callback.message.answer(
-            f"📅 <b>Ближайшие матчи: {team.name}</b>\n\n"
+            f"📅 <b>Ближайшие матчи</b>\n{escape_html(team.name)}\n\n"
             "Предстоящих матчей пока нет.",
             reply_markup=_get_team_back_kb(team),
         )
@@ -420,7 +431,11 @@ async def cb_team_upcoming(callback: CallbackQuery, state: FSMContext) -> None:
     await _safe_edit_text(
         callback,
         FootballFormatter.format_matches_list(
-            matches, f"Ближайшие матчи: {team.name}", max_count=15, show_sections=False
+            matches,
+            title="📅 Ближайшие матчи",
+            team_name=team.name,
+            max_count=15,
+            show_sections=False,
         ),
         reply_markup=_get_team_back_kb(team),
     )
@@ -441,7 +456,7 @@ async def cb_team_results(callback: CallbackQuery, state: FSMContext) -> None:
     results = await deps.football_service.get_team_recent_results(team)
     if not results:
         await callback.message.answer(
-            f"🔥 <b>Последние результаты: {team.name}</b>\n\n"
+            f"🔥 <b>Последние результаты</b>\n{escape_html(team.name)}\n\n"
             "Завершённых матчей пока нет.",
             reply_markup=_get_team_back_kb(team),
         )
@@ -452,7 +467,11 @@ async def cb_team_results(callback: CallbackQuery, state: FSMContext) -> None:
     await _safe_edit_text(
         callback,
         FootballFormatter.format_matches_list(
-            results, f"Последние результаты: {team.name}", max_count=15, show_sections=False
+            results,
+            title="🔥 Последние результаты",
+            team_name=team.name,
+            max_count=15,
+            show_sections=False,
         ),
         reply_markup=_get_team_back_kb(team),
     )
@@ -494,10 +513,8 @@ async def cb_team_standing(callback: CallbackQuery, state: FSMContext) -> None:
             break
 
     if team_standing:
-        text = FootballFormatter.format_standings(standings, league.name)
-        text += (
-            f"\n\n⚽ <b>{team.name}</b> — {team_standing.position} место "
-            f"({team_standing.points} {pluralize_points(team_standing.points)})"
+        text = FootballFormatter.format_standings(
+            standings, league.name, highlight_team=team.name
         )
     else:
         text = (
@@ -506,7 +523,7 @@ async def cb_team_standing(callback: CallbackQuery, state: FSMContext) -> None:
         )
 
     await _safe_edit_text(
-        callback, text, reply_markup=get_main_back_keyboard()
+        callback, text, reply_markup=_get_team_back_kb(team)
     )
     await callback.answer()
 
