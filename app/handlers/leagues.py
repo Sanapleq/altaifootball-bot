@@ -54,24 +54,32 @@ async def _find_team_by_id(team_id: str) -> Team | None:
     """Найти команду по ID через все доступные лиги.
 
     ⚠️  Делает N HTTP-запросов (по одному на лигу).
-        Всегда сохраняйте команду в state при первом обнаружении.
+        Вызывается ТОЛЬКО как последний fallback.
     """
     leagues_list = await deps.football_service.get_leagues()
     logger.debug(
-        "Поиск команды %s: перебираем %d лиг", team_id, len(leagues_list)
+        "[_find_team_by_id] Старт: %d лиг, ищем team_id=%s",
+        len(leagues_list), team_id,
     )
+    found_count = 0
     for league in leagues_list:
         try:
             teams = await deps.football_service.get_league_teams(league)
-            for team in teams:
-                if team.id == team_id:
+            for t in teams:
+                if t.id == team_id:
                     logger.info(
-                        "Команда %s найдена в лиге %s", team.name, league.name
+                        "[_find_team_by_id] Команда '%s' найдена в лиге '%s'",
+                        t.name, league.name,
                     )
-                    return team
-        except Exception as exc:
-            logger.warning("Ошибка загрузки команд лиги %s: %s", league.name, exc)
-    logger.warning("Команда с ID=%s не найдена ни в одной лиге", team_id)
+                    return t
+            found_count += len(teams)
+        except Exception:
+            pass  # Тихо пропускаем ошибочные лиги
+    logger.debug(
+        "[_find_team_by_id] Итог: team_id=%s не найдена "
+        "(проверено %d лиг, %d команд)",
+        team_id, len(leagues_list), found_count,
+    )
     return None
 
 
@@ -79,21 +87,28 @@ async def _find_league_for_team(team_id: str) -> League | None:
     """Найти лигу, в которой играет команда с данным ID."""
     leagues_list = await deps.football_service.get_leagues()
     logger.debug(
-        "Поиск лиги для команды %s: перебираем %d лиг",
-        team_id, len(leagues_list),
+        "[_find_league_for_team] Старт: %d лиг, ищем team_id=%s",
+        len(leagues_list), team_id,
     )
+    found_count = 0
     for league in leagues_list:
         try:
             teams = await deps.football_service.get_league_teams(league)
-            for team in teams:
-                if team.id == team_id:
+            for t in teams:
+                if t.id == team_id:
                     logger.info(
-                        "Лига %s найдена для команды %s", league.name, team.name
+                        "[_find_league_for_team] Лига '%s' найдена для команды '%s'",
+                        league.name, t.name,
                     )
                     return league
-        except Exception as exc:
-            logger.warning("Ошибка поиска лиги для команды %s: %s", team_id, exc)
-    logger.warning("Не удалось найти лигу для команды с ID=%s", team_id)
+            found_count += len(teams)
+        except Exception:
+            pass
+    logger.debug(
+        "[_find_league_for_team] Итог: лига для team_id=%s не найдена "
+        "(проверено %d лиг, %d команд)",
+        team_id, len(leagues_list), found_count,
+    )
     return None
 
 
@@ -102,19 +117,32 @@ async def _get_team_from_state_or_search(
 ) -> Team | None:
     """Получить команду по ID.
 
-    Логика:
-    1. Если в state кэширован selected_team и его ID совпадает с team_id — берём из кэша.
-    2. Если ID не совпадает или кэша нет — ищем через все лиги.
-    3. Всегда возвращаем Team с корректным team_id.
+    Логика (по приоритету):
+    1. Если selected_team в state и ID совпадает — берём из кэша.
+    2. Если selected_league_id есть — ищем только в этой лиге.
+    3. Fallback: ищем через все лиги.
     """
     state_data = await state.get_data()
     team: Team | None = state_data.get("selected_team")
 
-    # Если кэшированная команда — это именно та, которую просим — используем её
+    # 1. Кэшированная команда совпадает — возвращаем сразу
     if team is not None and team.id == team_id:
         return team
 
-    # Иначе ищем по ID (может быть другая команда)
+    # 2. Пробуем найти в сохранённой лиге (один запрос вместо N)
+    league_id = state_data.get("selected_league_id")
+    if league_id:
+        league = await deps.football_service.get_league_by_id(league_id)
+        if league:
+            try:
+                teams = await deps.football_service.get_league_teams(league)
+                for t in teams:
+                    if t.id == team_id:
+                        return t
+            except Exception:
+                pass
+
+    # 3. Fallback: сканируем все лиги
     return await _find_team_by_id(team_id)
 
 
@@ -325,7 +353,22 @@ async def cb_select_team(callback: CallbackQuery, state: FSMContext) -> None:
             break
 
     if team is None:
-        team = await _find_team_by_id(team_id)
+        # Пробуем реконструировать URL команды из league_id, не сканируя все лиги
+        league_id = state_data.get("selected_league_id")
+        if league_id:
+            league = await deps.football_service.get_league_by_id(league_id)
+            if league:
+                teams = await deps.football_service.get_league_teams(league)
+                for t in teams:
+                    if t.id == team_id:
+                        team = t
+                        teams_list = teams
+                        break
+
+        # Только если не нашли — сканируем все лиги (редкий fallback)
+        if team is None:
+            logger.debug("Команда %s не найдена в кэше, пробую поиск по всем лигам", team_id)
+            team = await _find_team_by_id(team_id)
 
     if team is None:
         await callback.message.answer(

@@ -102,8 +102,23 @@ class HttpxBackend(PageLoaderBackend):
         try:
             response = await client.get(full_url)
             response.raise_for_status()
-            logger.debug("HTTP %d: %s (%d bytes)", response.status_code, full_url, len(response.text))
+            html_len = len(response.text)
+
+            # Пустой HTML — отдельная ошибка
+            if html_len < 100:
+                logger.warning(
+                    "Пустой HTML (%d bytes): %s", html_len, full_url
+                )
+                raise PageLoaderError(
+                    f"Пустая страница ({html_len} bytes): {full_url}",
+                    status_code=response.status_code,
+                )
+
+            logger.debug("HTTP %d: %s (%d bytes)", response.status_code, full_url, html_len)
             return response.text
+
+        except PageLoaderError:
+            raise  # Пробрасываем свои ошибки без обёртки
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
