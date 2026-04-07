@@ -1,6 +1,7 @@
 """Кеш-сервис с TTL для кэширования данных сайта.
 
 Интерфейсный дизайн — легко заменить на Redis или другой бэкенд.
+Усилен статистикой хитов/промахов для диагностики.
 """
 
 from __future__ import annotations
@@ -33,6 +34,11 @@ class CacheBackend(ABC):
         """Очистить весь кеш."""
         ...
 
+    @abstractmethod
+    def size(self) -> int:
+        """Текущее количество записей."""
+        ...
+
 
 class InMemoryCache(CacheBackend):
     """In-memory кеш с TTL.
@@ -42,18 +48,23 @@ class InMemoryCache(CacheBackend):
 
     def __init__(self) -> None:
         self._store: dict[str, tuple[Any, float]] = {}  # key -> (value, expire_at)
+        self._hits = 0
+        self._misses = 0
 
     async def get(self, key: str) -> Optional[Any]:
         """Получить значение. Возвращает None если ключа нет или запись протухла."""
         if key not in self._store:
+            self._misses += 1
             return None
 
         value, expire_at = self._store[key]
         if time.time() > expire_at:
             # Запись протухла — удаляем
             del self._store[key]
+            self._misses += 1
             return None
 
+        self._hits += 1
         return value
 
     async def set(self, key: str, value: Any, ttl: int) -> None:
@@ -67,6 +78,25 @@ class InMemoryCache(CacheBackend):
     async def clear(self) -> None:
         """Очистить весь кеш."""
         self._store.clear()
+        self._hits = 0
+        self._misses = 0
+
+    def size(self) -> int:
+        """Текущее количество записей (включая протухшие)."""
+        return len(self._store)
+
+    @property
+    def hits(self) -> int:
+        return self._hits
+
+    @property
+    def misses(self) -> int:
+        return self._misses
+
+    @property
+    def hit_rate(self) -> float:
+        total = self._hits + self._misses
+        return self._hits / total if total > 0 else 0.0
 
     async def cleanup_expired(self) -> int:
         """Очистить протухшие записи. Возвращает количество удалённых."""
@@ -146,6 +176,45 @@ class CacheService:
         if isinstance(self._backend, InMemoryCache):
             return await self._backend.cleanup_expired()
         return 0
+
+    # --- Статистика ---
+
+    @property
+    def hits(self) -> int:
+        """Количество cache hits."""
+        if isinstance(self._backend, InMemoryCache):
+            return self._backend.hits
+        return 0
+
+    @property
+    def misses(self) -> int:
+        """Количество cache misses."""
+        if isinstance(self._backend, InMemoryCache):
+            return self._backend.misses
+        return 0
+
+    @property
+    def hit_rate(self) -> float:
+        """Процент попаданий в кеш."""
+        if isinstance(self._backend, InMemoryCache):
+            return self._backend.hit_rate
+        return 0.0
+
+    @property
+    def size(self) -> int:
+        """Текущее количество записей в кеше."""
+        if isinstance(self._backend, InMemoryCache):
+            return self._backend.size()
+        return 0
+
+    def get_stats(self) -> dict[str, int | float]:
+        """Получить статистику кеша для диагностики."""
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "hit_rate": round(self.hit_rate, 3),
+            "size": self.size,
+        }
 
 
 # Глобальный экземпляр кеша

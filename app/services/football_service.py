@@ -28,6 +28,10 @@ class FootballService:
         """Закрыть ресурсы."""
         await self._parser.close()
 
+    def get_cache_stats(self) -> dict:
+        """Получить статистику кеша для диагностики."""
+        return cache.get_stats()
+
     # ========================================================================
     # ЛИГИ
     # ========================================================================
@@ -36,15 +40,16 @@ class FootballService:
         """Получить список лиг (из кеша или с парсинга)."""
         cached = await cache.get_leagues()
         if cached is not None:
-            logger.debug("Лиги загружены из кеша")
+            logger.debug("[service] Лиги загружены из кеша (%d шт)", len(cached))
             return cached
 
         try:
             leagues = await self._parser.get_leagues()
             await cache.set_leagues(leagues)
+            logger.debug("[service] Лиги загружены с сайта, закэшировано: %d", len(leagues))
             return leagues
         except Exception as e:
-            logger.error(f"Ошибка получения лиг: {e}")
+            logger.error("[service] Ошибка получения лиг: %s", e)
             return []
 
     async def get_league_by_id(self, league_id: str) -> Optional[League]:
@@ -63,18 +68,18 @@ class FootballService:
         """Получить команды лиги."""
         cached = await cache.get_teams(league.id)
         if cached is not None:
-            logger.debug(f"Команды лиги {league.name} загружены из кеша")
+            logger.debug("[service] Команды лиги '%s' из кеша (%d шт)", league.name, len(cached))
             return cached
 
         try:
             teams = await self._parser.get_league_teams(league)
-            # Проставляем league_id (на случай если парсер не проставил)
             for team in teams:
                 team.league_id = league.id
             await cache.set_teams(league.id, teams)
+            logger.debug("[service] Команды лиги '%s' загружены с сайта: %d", league.name, len(teams))
             return teams
         except Exception as e:
-            logger.error(f"Ошибка получения команд лиги {league.name}: {e}")
+            logger.error("[service] Ошибка получения команд лиги '%s': %s", league.name, e)
             return []
 
     # ========================================================================

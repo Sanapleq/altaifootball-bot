@@ -38,6 +38,22 @@ from app.models.football import League, Match, StandingRow, Team
 from app.utils.dates import parse_russian_date
 from app.utils.text import clean_text
 
+# Debug-импорты
+try:
+    from app.services.debug_snapshot import save_debug_html
+    _DEBUG_AVAILABLE = True
+except ImportError:
+    _DEBUG_AVAILABLE = False
+
+
+def _debug_save(html: str, name: str, **kwargs) -> None:
+    """Сохранить HTML для отладки если включён флаг."""
+    if _DEBUG_AVAILABLE and getattr(settings, "debug_save_html", False):
+        try:
+            save_debug_html(html, name, **kwargs)
+        except Exception as e:
+            logger.debug("Ошибка сохранения debug HTML: %s", e)
+
 # ── Словарь мусорных текстов, которые НЕ должны попадать в данные ─────
 
 _NAVIGATION_TEXTS = frozenset({
@@ -338,20 +354,22 @@ class SiteParser:
         Returns:
             Список объектов League.
         """
-        logger.info("Получение списка лиг")
+        logger.info("[leagues] Загрузка списка лиг с /tournaments/")
 
         try:
             html = await self._fetch_page("/tournaments/")
             soup = self._parse_html(html)
         except SiteParserError as e:
-            logger.error("Не удалось загрузить страницу лиг: %s", e)
+            logger.error("[leagues] Не удалось загрузить страницу: %s", e)
+            _debug_save(html if 'html' in dir() else "", "leagues_error", extra=str(e))
             return []
+
+        logger.debug("[leagues] HTML размер: %d байт", len(html))
 
         leagues: list[League] = []
         seen_urls: set[str] = set()
 
         # Извлекаем ВСЕ ссылки вида /tournaments/{year}/{id}/
-        # Исключаем саму страницу /tournaments/ и вложенные /teams/, /stats/, /schedule/
         tournament_pattern = re.compile(r"/tournaments/\d+/\d+/$")
 
         for link in soup.find_all("a", href=tournament_pattern):
@@ -359,6 +377,7 @@ class SiteParser:
             text = clean_text(link.get_text())
 
             if not text or len(text) < 2:
+                logger.debug("[leagues] Пропущена ссылка без текста: %s", href)
                 continue
 
             abs_url = self._make_absolute_url(href)
@@ -366,8 +385,6 @@ class SiteParser:
                 continue
             seen_urls.add(abs_url)
 
-            # Извлекаем year и tournament_id из URL
-            # /tournaments/2025/3472/ → year=2025, id=3472
             m = re.search(r"/tournaments/(\d+)/(\d+)/", href)
             if not m:
                 continue
@@ -382,7 +399,14 @@ class SiteParser:
                 season=year,
             ))
 
-        logger.info("Найдено лиг: %d", len(leagues))
+        if not leagues:
+            logger.warning("[leagues] Не найдено ни одной лиги на /tournaments/")
+            _debug_save(html, "leagues_empty")
+
+        logger.info(
+            "[leagues] Найдено лиг: %d | URLs: %d | HTML: %d bytes",
+            len(leagues), len(seen_urls), len(html)
+        )
         return leagues
 
     # ========================================================================
@@ -402,33 +426,33 @@ class SiteParser:
         Returns:
             Список объектов Team.
         """
-        logger.info("Получение команд лиги: %s", league.name)
+        logger.info("[league_teams] Загрузка команд лиги: %s (id=%s)", league.name, league.id)
 
         try:
             html = await self._fetch_page(league.url)
             soup = self._parse_html(html)
         except SiteParserError as e:
-            logger.error("Не удалось загрузить страницу команд: %s", e)
+            logger.error("[league_teams] Не удалось загрузить страницу: %s", e)
             return []
+
+        logger.debug("[league_teams] HTML размер: %d байт", len(html))
 
         teams: list[Team] = []
         seen_ids: set[str] = set()
 
-        # Извлекаем year из URL лиги для построения URL команд
-        # URL лиги: /tournaments/{year}/{id}/
         url_match = re.search(r"/tournaments/(\d+)/(\d+)/", league.url)
         league_year = url_match.group(1) if url_match else ""
         league_id_from_url = url_match.group(2) if url_match else league.id
 
-        # Стратегия 1: Ищем таблицу table_box_row — это standings
+        tables_found = 0
         for table in soup.find_all("table", class_="table_box_row"):
+            tables_found += 1
             for row in table.find_all("tr"):
                 link = row.find("a", href=True)
                 if not link:
                     continue
 
                 href = link.get("href", "")
-                # Проверяем что ссылка ведёт на команду в этом турнире
                 team_m = re.search(r"/tournaments/\d+/\d+/teams/(\d+)/", href)
                 if not team_m:
                     continue
@@ -437,8 +461,6 @@ class SiteParser:
                 if team_id in seen_ids:
                     continue
 
-                # Название команды — текст ссылки
-                # Формат: "Полимер-МБарнаул" — нужно разделить
                 raw_name = clean_text(link.get_text())
                 team_name = self._split_team_name(raw_name)
 
@@ -456,8 +478,9 @@ class SiteParser:
             if teams:
                 break
 
-        # Стратегия 2: Ищем все ссылки на команды в контенте страницы
+        # Стратегия 2
         if not teams:
+            logger.debug("[league_teams] table_box_row не дала команд, ищу все ссылки на команды")
             team_link_pattern = re.compile(
                 rf"/tournaments/\d+/{re.escape(league_id_from_url)}/teams/(\d+)/"
             )
@@ -484,7 +507,14 @@ class SiteParser:
                     league_id=league.id,
                 ))
 
-        logger.info("Найдено команд: %d", len(teams))
+        if not teams:
+            logger.warning(
+                "[league_teams] Лига '%s' — не найдено команд. table_box_row=%d",
+                league.name, tables_found
+            )
+            _debug_save(html, "league_teams_empty", league_id=league.id)
+
+        logger.info("[league_teams] Лига '%s' найдено команд: %d", league.name, len(teams))
         return teams
 
     def _find_standings_table(self, soup: BeautifulSoup) -> Optional[Tag]:
@@ -676,34 +706,46 @@ class SiteParser:
         Returns:
             Список строк таблицы.
         """
-        logger.info("Получение турнирной таблицы: %s", league_url)
+        logger.info("[standings] Загрузка таблицы: %s", league_url)
 
         try:
             html = await self._fetch_page(league_url)
             soup = self._parse_html(html)
         except SiteParserError as e:
-            logger.error("Не удалось загрузить страницу таблицы: %s", e)
+            logger.error("[standings] Не удалось загрузить страницу: %s", e)
             return []
+
+        logger.debug("[standings] HTML размер: %d байт", len(html))
 
         standings: list[StandingRow] = []
 
-        # Ищем таблицу table_box_row — это guaranteed standings
+        tables_checked = 0
         for table in soup.find_all("table", class_="table_box_row"):
+            tables_checked += 1
             standings = self._parse_standings_table_box(table)
             if standings:
                 break
 
-        # Fallback: ищем любую таблицу с числовыми данными и ссылками
+        # Fallback
         if not standings:
+            logger.debug("[standings] table_box_row не дал результатов, пробую все таблицы")
             for table in soup.find_all("table"):
                 if table.get("class") and ("page" in table.get("class") or "site" in table.get("class")):
-                    continue  # Пропускаем навигацию
+                    continue
+                tables_checked += 1
                 standings = self._parse_standings_table_box(table)
                 if len(standings) >= 2:
                     break
                 standings = []
 
-        logger.info("Найдено строк в таблице: %d", len(standings))
+        if not standings:
+            logger.warning(
+                "[standings] Не найдено строк таблицы. Проверено таблиц: %d",
+                tables_checked
+            )
+            _debug_save(html, "standings_empty")
+
+        logger.info("[standings] Найдено строк: %d | проверено таблиц: %d", len(standings), tables_checked)
         return standings
 
     def _parse_standings_table_box(self, table: Tag) -> list[StandingRow]:
@@ -829,30 +871,54 @@ class SiteParser:
         Returns:
             Список объектов Match.
         """
-        logger.info("Получение матчей команды: %s", team_url)
+        logger.info("[team_matches] Загрузка матчей команды: %s", team_url)
 
         try:
             html = await self._fetch_page(team_url)
             soup = self._parse_html(html)
         except SiteParserError as e:
-            logger.error("Не удалось загрузить страницу матчей: %s", e)
+            logger.error("[team_matches] Не удалось загрузить страницу: %s", e)
+            _debug_save("", "team_matches_error", extra=team_url)
             return []
+
+        logger.debug("[team_matches] HTML размер: %d байт", len(html))
+
+        # Извлекаем название команды для логов
+        team_name = self._extract_current_team_name(soup) or "unknown"
 
         matches = self._extract_team_matches_from_table_box(soup, team_url)
 
         if matches:
-            logger.info("Найдено матчей (table_box_row): %d", len(matches))
+            # Статистика по статусам
+            finished = sum(1 for m in matches if m.is_finished)
+            scheduled = sum(1 for m in matches if m.status == "scheduled")
+            unknown = sum(1 for m in matches if m.status == "unknown")
+            live = sum(1 for m in matches if m.is_live)
+
+            logger.info(
+                "[team_matches] Команда '%s' найдено матчей: %d "
+                "(finished=%d, scheduled=%d, unknown=%d, live=%d)",
+                team_name, len(matches), finished, scheduled, unknown, live
+            )
         else:
+            logger.warning(
+                "[team_matches] Команда '%s' — матчи не найдены. "
+                "Пробую fallback парсинг...",
+                team_name,
+            )
+            _debug_save(html, "team_matches_empty", extra=team_name)
+
             # Fallback: пробуем общий парсинг страницы
             matches = self._extract_matches_from_page(soup)
-            logger.info(
-                "Найдено матчей (fallback общий парсинг): %d", len(matches)
-            )
-            if not matches:
+            if matches:
+                logger.info(
+                    "[team_matches] Fallback нашёл %d матчей", len(matches)
+                )
+            else:
                 logger.warning(
-                    "Не удалось найти матчи команды %s. "
-                    "Возможно, структура страницы изменилась.",
-                    team_url,
+                    "[team_matches] Команда '%s' — ни один метод не нашёл матчей. "
+                    "URL: %s",
+                    team_name, team_url,
                 )
 
         return matches

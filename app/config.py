@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     bot_token: str = Field(default="", alias="BOT_TOKEN")
 
     # Сайт
-    base_url: str = Field(default="https://altaifootball.ru", alias="BASE_URL")
+    base_url: str = Field(default="https://www.altaifootball.ru", alias="BASE_URL")
 
     # HTTP
     request_timeout: int = Field(default=30, alias="REQUEST_TIMEOUT")
@@ -39,6 +39,10 @@ class Settings(BaseSettings):
 
     # База данных
     db_path: str = Field(default="data/bot.db", alias="DB_PATH")
+
+    # Debug
+    debug_save_html: bool = Field(default=False, alias="DEBUG_SAVE_HTML")
+    use_playwright_fallback: bool = Field(default=False, alias="USE_PLAYWRIGHT_FALLBACK")
 
 
 # Глобальный экземпляр настроек
