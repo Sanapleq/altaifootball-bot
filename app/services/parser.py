@@ -35,6 +35,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from app.config import settings
 from app.logger import logger
 from app.models.football import League, Match, StandingRow, Team
+from app.services.page_loader import PageLoader
 from app.utils.dates import parse_russian_date
 from app.utils.text import clean_text
 
@@ -229,7 +230,8 @@ class SiteParserError(Exception):
 class SiteParser:
     """Парсер сайта altaifootball.ru.
 
-    Все методы делают HTTP-запросы, парсят HTML и возвращают модели данных.
+    Все методы делают HTTP-запросы через PageLoader,
+    парсят HTML и возвращают модели данных.
     При ошибках — логируют и возвращают fallback-значения.
     """
 
@@ -240,32 +242,14 @@ class SiteParser:
             base_url: Базовый URL сайта (из настроек по умолчанию).
         """
         self.base_url = base_url or settings.base_url
-        self._client: Optional[httpx.AsyncClient] = None
-
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Получить или создать HTTP-клиент."""
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                base_url=self.base_url,
-                timeout=settings.request_timeout,
-                follow_redirects=True,
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/120.0.0.0 Safari/537.36"
-                    ),
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-                },
-            )
-        return self._client
+        self._loader = PageLoader(
+            base_url=self.base_url,
+            use_playwright_fallback=getattr(settings, "use_playwright_fallback", False),
+        )
 
     async def close(self) -> None:
-        """Закрыть HTTP-клиент."""
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
-            self._client = None
+        """Закрыть PageLoader (и все его бэкенды)."""
+        await self._loader.close()
 
     @retry(
         stop=stop_after_attempt(3),
@@ -273,7 +257,7 @@ class SiteParser:
         reraise=True,
     )
     async def _fetch_page(self, url: str) -> str:
-        """Загрузить HTML-страницу.
+        """Загрузить HTML-страницу через PageLoader.
 
         Args:
             url: Относительный или абсолютный URL.
@@ -284,19 +268,14 @@ class SiteParser:
         Raises:
             SiteParserError: При ошибке загрузки.
         """
-        client = await self._get_client()
-        full_url = url if url.startswith("http") else urljoin(self.base_url, url)
+        from app.services.page_loader import PageLoaderError
 
         try:
-            response = await client.get(full_url)
-            response.raise_for_status()
-            return response.text
-        except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP ошибка при загрузке {full_url}: {e.response.status_code}")
-            raise SiteParserError(f"HTTP {e.response.status_code} при загрузке страницы")
-        except httpx.RequestError as e:
-            logger.error(f"Ошибка запроса к {full_url}: {e}")
-            raise SiteParserError(f"Ошибка соединения: {e}")
+            return await self._loader.fetch_page(url)
+        except PageLoaderError as e:
+            raise SiteParserError(str(e)) from e
+        except Exception as e:
+            raise SiteParserError(f"Неожиданная ошибка при загрузке {url}: {e}") from e
 
     def _parse_html(self, html: str) -> BeautifulSoup:
         """Распарсить HTML в BeautifulSoup.
