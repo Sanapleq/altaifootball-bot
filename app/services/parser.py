@@ -912,8 +912,10 @@ class SiteParser:
     def _extract_current_team_name(self, soup: BeautifulSoup) -> str:
         """Извлечь название текущей команды из страницы.
 
-        Ищем текст вида '"Полимер-М" Барнаул' или 'СШ №7 Барнаул'
-        рядом со ссылкой "Расписание".
+        Стратегии (по приоритету):
+        1. Тег <title> — содержит 'команды "Название" Город'
+        2. Текст рядом со ссылкой "Расписание"
+        3. Ссылка с именем команды в заголовке страницы
 
         Args:
             soup: BeautifulSoup объект.
@@ -921,23 +923,44 @@ class SiteParser:
         Returns:
             Название команды или пустая строка.
         """
-        # Ищем ссылку "Расписание" и берём текст перед ней
+        # Стратегия 1: <title> — самый надёжный источник
+        title_tag = soup.find("title")
+        if title_tag:
+            title_text = title_tag.get_text()
+            m = re.search(r'команды\s+"([^"]+)"\s*([^\-–—]+)', title_text, re.IGNORECASE)
+            if m:
+                name_part = m.group(1)
+                city_part = m.group(2).strip().rstrip(" -–—")
+                if city_part:
+                    return f"{name_part} {city_part}"
+                return name_part
+
+        # Стратегия 2: текст рядом со ссылкой "Расписание"
         for link in soup.find_all("a", href=True):
             if "расписание" in link.get_text().lower():
-                # Берём родительский элемент и ищем текст команды
+                # Ищем вверх по дереву до div с именем команды
                 parent = link.parent
-                if parent:
+                for _ in range(4):
+                    if parent is None:
+                        break
                     text = parent.get_text()
-                    # Ищем текст в кавычках перед "Расписание"
-                    m = re.search(r'"([^"]+)"\s*.*?Расписание', text)
+                    # Ищем текст в кавычках
+                    m = re.search(r'"([^"]+)"\s*([^\d(]*?)\s*(?:место|\d|Расписание)', text)
                     if m:
-                        return m.group(1)
-                    # Или текст до "Расписание"
-                    idx = text.find("Расписание")
-                    if idx > 0:
-                        candidate = text[:idx].strip().rstrip("1234567890 ")
-                        if candidate and len(candidate) >= 2:
-                            return candidate
+                        name_part = m.group(1)
+                        city_part = m.group(2).strip()
+                        if city_part:
+                            return f"{name_part} {city_part}"
+                        return name_part
+                    parent = parent.parent
+
+        # Стратегия 3: первая ссылка с именем команды в верху страницы
+        for link in soup.find_all("a", href=True):
+            text = link.get_text().strip()
+            if text and len(text) >= 3 and "расписание" not in text.lower():
+                href = link.get("href", "").lower()
+                if "/teams/" in href:
+                    return text
 
         return ""
 
@@ -946,7 +969,12 @@ class SiteParser:
     ) -> Optional[Match]:
         """Распарсить строку матча из таблицы команды.
 
-        Формат: Дата | Этап | Соперник | Счет | | Место
+        Реальный формат на сайте (table_box_row):
+        Дата | Этап | Соперник | Счёт | (пусто) | (пусто) | Стадион
+
+        Счёт содержит суффикс: 2:1В (В=победа), 3:7П (П=поражение), 1:1Н (Н=ничья).
+        По суффиксу определяем, была ли команда дома или в гостях.
+        Также есть ссылка на boxscore: /tournaments/boxscore/{id}/ или /boxscore/{id}/preview/
 
         Args:
             row: Тег <tr>.
@@ -960,29 +988,40 @@ class SiteParser:
         if len(cells) < 4:
             return None
 
-        # Дата — первая ячейка: "17.05.2025,Сб,18:00"
+        # Дата — первая ячейка: "15.03.2026,Вс,16:00"
         date_text = clean_text(cells[0].get_text())
         match_date = self._parse_team_date(date_text)
 
-        # Этап — вторая: "2 тур"
+        # Этап — вторая: "1 тур"
         round_text = clean_text(cells[1].get_text()) if len(cells) > 1 else ""
 
-        # Соперник — третья: "СШ №7Барнаул"
+        # Соперник — третья: "АТТ фермерАлейск"
         opponent_raw = clean_text(cells[2].get_text()) if len(cells) > 2 else ""
         opponent_name = self._split_team_name(opponent_raw)
 
-        # Счёт — четвёртая: "3:1В" (В=выигрыш, Н=ничья, П=проигрыш)
+        # Счёт — четвёртая: "2:1В" (В=победа), "3:7П" (П=поражение), "1:1Н" (Н=ничья), "?-?" (не сыгран)
         score_raw = clean_text(cells[3].get_text()) if len(cells) > 3 else ""
-
-        # Место — последняя: "Дома" или "Выезд"
-        venue_cell = cells[-1] if len(cells) > 4 else None
-        venue_text = clean_text(venue_cell.get_text()) if venue_cell else ""
-        is_home = "дома" in venue_text.lower()
 
         if not opponent_name or len(opponent_name) < 2:
             return None
 
-        # Парсим счёт
+        # Определяем результат по суффиксу счёта
+        # В = победа текущей команды, П = поражение, Н = ничья
+        result_suffix = ""
+        for ch in reversed(score_raw):
+            if ch in ("В", "Н", "П"):
+                result_suffix = ch
+                break
+
+        # Извлекаем ссылку на boxscore из ячейки счёта
+        score_cell = cells[3]
+        score_link = score_cell.find("a", href=True) if score_cell else None
+        is_preview = False
+        if score_link:
+            href = score_link.get("href", "")
+            is_preview = "/preview/" in href
+
+        # Парсим счёт (убираем суффикс)
         home_score: int | None = None
         away_score: int | None = None
         status = "scheduled"
@@ -992,24 +1031,33 @@ class SiteParser:
             home_score = int(score_m.group(1))
             away_score = int(score_m.group(2))
             status = "finished"
-        elif "+" in score_raw or "-" in score_raw:
-            # Технический результат "+:-" или "-:+"
-            if "+:-" in score_raw:
-                home_score = None
-                away_score = None
-                status = "finished"
-            elif "-:+" in score_raw:
-                home_score = None
-                away_score = None
-                status = "finished"
+        elif "+:-" in score_raw or "-:+" in score_raw:
+            status = "finished"
+        elif score_raw == "?-?":
+            # Матч ещё не сыгран, счёт неизвестен
+            status = "scheduled" if match_date and match_date >= datetime.now() else "unknown"
 
-        # Определяем кто дома/кто в гостях
-        if is_home:
-            home_team = current_team_name if current_team_name else "—"
-            away_team = opponent_name
-        else:
-            home_team = opponent_name
-            away_team = current_team_name if current_team_name else "—"
+        # Определяем home/away по результату
+        # Если В (победа) — текущая команда забила больше → она home если счёт "нормальный"
+        # Но на сайте счёт всегда показывается как "забито:пропущено" для текущей команды
+        # Т.е. 2:1В = текущая команда забила 2, пропустила 1 → home_team = текущая
+        # На практике: на сайтеaltaifootball.ru счёт всегда показывается относительно
+        # текущей команды, независимо от home/away.
+        # Суффикс: В = победа, П = поражение, Н = ничья.
+        # Но нам нужно знать, была ли команда дома.
+        # На данной странице НЕТ явной колонки home/away.
+        # Стратегия: если матч завершён и есть boxscore (не preview) —
+        #   текущая команда = home если В/Н, away если П (грубая эвристика)
+        #   НО: это ненадёжно. Лучше — парсим boxscore.
+        #
+        # Упрощённый подход для текущей версии:
+        #   считаем текущую команду home_team всегда,
+        #   а соперника — away_team.
+        #   Это даст правильный вывод счёта (2:1 = наша команда забила 2).
+        #   Для будущего улучшения — можно парсить boxscore для точного home/away.
+
+        home_team = current_team_name if current_team_name else opponent_name
+        away_team = opponent_name if current_team_name else "—"
 
         if not home_team or not away_team:
             return None
@@ -1025,21 +1073,20 @@ class SiteParser:
             else:
                 status = "scheduled"
 
-        # Извлекаем стадион из последней ячейки
+        # Стадион — последняя непустая ячейка (обычно индекс 6 в данных)
         venue = ""
-        if venue_cell:
-            # Стадион может быть в отдельной ячейке или вместе с "Дома"/"Выезд"
-            venue_text_full = clean_text(venue_cell.get_text())
-            # Ищем после "Дома" или "Выезд"
-            for keyword in ["Дома", "Выезд"]:
-                idx = venue_text_full.find(keyword)
-                if idx >= 0:
-                    venue = clean_text(venue_text_full[idx + len(keyword):])
+        if len(cells) > 4:
+            # Ищем последнюю непустую ячейку
+            for ci in range(len(cells) - 1, 3, -1):
+                venue_text = clean_text(cells[ci].get_text())
+                if venue_text:
+                    # Убираем "Дома"/"Выезд" если есть
+                    for keyword in ["Дома", "Выезд"]:
+                        venue_text = venue_text.replace(keyword, "").strip()
+                    if venue_text:
+                        venue = venue_text
                     break
-            if not venue:
-                venue = venue_text_full
 
-        # Извлекаем ID команды из URL для генерации match ID
         team_id_m = re.search(r"/teams/(\d+)/", team_url)
         team_id_part = team_id_m.group(1) if team_id_m else "unknown"
 
@@ -1061,7 +1108,11 @@ class SiteParser:
     def _parse_team_date(self, date_text: str) -> datetime | None:
         """Распарсить дату из формата страницы команды.
 
-        Формат: "17.05.2025,Сб,18:00" или "17.05.2025"
+        Форматы:
+        - "15.03.2026, Вс, 16:00" (с пробелами)
+        - "15.03.2026,Вс,18:00" (без пробелов)
+        - "19.04.2026, Вс" (без времени)
+        - "17.05.2025" (просто дата)
 
         Args:
             date_text: Текст даты.
@@ -1072,8 +1123,11 @@ class SiteParser:
         if not date_text:
             return None
 
+        # Убираем пробелы после запятых для унификации
+        normalized = re.sub(r",\s*", ",", date_text.strip())
+
         # Пробуем формат "DD.MM.YYYY,Дд,HH:MM"
-        m = re.match(r"(\d{2})\.(\d{2})\.(\d{4}),\w+,(\d{2}):(\d{2})", date_text)
+        m = re.match(r"(\d{2})\.(\d{2})\.(\d{4}),\w+,(\d{2}):(\d{2})", normalized)
         if m:
             try:
                 return datetime(
@@ -1084,7 +1138,7 @@ class SiteParser:
                 pass
 
         # Пробуем "DD.MM.YYYY,Дд" без времени
-        m = re.match(r"(\d{2})\.(\d{2})\.(\d{4}),\w+", date_text)
+        m = re.match(r"(\d{2})\.(\d{2})\.(\d{4}),\w+", normalized)
         if m:
             try:
                 return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
