@@ -551,6 +551,7 @@ class FootballFormatter:
             time_str = dt.strftime(" %H:%M") if dt.hour or dt.minute else ""
             lines.append(f"{date_str}{time_str}")
 
+        lines.append("────────────────")
         lines.append("")
 
         # Форма домашней команды
@@ -597,6 +598,7 @@ class FootballFormatter:
         lines.append(f"🔮 <b>Прогнозируемый счёт:</b>")
         lines.append(f"  <b>{prediction.predicted_home_score}:{prediction.predicted_away_score}</b>")
         lines.append("")
+        lines.append("────────────────")
         lines.append("⚠️ <i>Это статистический прогноз на основе формы команд, не гарантия результата.</i>")
 
         return "\n".join(lines)

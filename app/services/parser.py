@@ -37,7 +37,7 @@ from app.logger import logger
 from app.models.football import League, Match, StandingRow, Team
 from app.services.page_loader import PageLoader
 from app.utils.dates import parse_russian_date
-from app.utils.text import clean_text
+from app.utils.text import clean_text, normalize_team_name
 
 # Debug-импорты
 try:
@@ -2572,6 +2572,7 @@ class SiteParser:
             Список найденных команд.
         """
         logger.info(f"Поиск команды: {query}")
+        query_norm = normalize_team_name(query)
 
         # Пробуем поиск на сайте (endpoint может отсутствовать — это нормально)
         soup: BeautifulSoup | None = None
@@ -2598,7 +2599,7 @@ class SiteParser:
             ]:
                 for link in soup.select(selector):
                     text = clean_text(link.get_text())
-                    if query.lower() in text.lower():
+                    if query_norm and query_norm in normalize_team_name(text):
                         team = self._extract_team_from_element(link)
                         if team and team.id not in seen_ids:
                             teams.append(team)
@@ -2613,7 +2614,7 @@ class SiteParser:
                 try:
                     league_teams = await self.get_league_teams(league)
                     for team in league_teams:
-                        if query.lower() in team.name.lower():
+                        if query_norm and query_norm in normalize_team_name(team.name):
                             if team.id not in seen_ids:
                                 teams.append(team)
                                 seen_ids.add(team.id)

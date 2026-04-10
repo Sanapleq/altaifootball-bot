@@ -22,6 +22,13 @@ class SubscriptionRepository:
         self._db_path = db_path or settings.db_path
         self._initialized = False
 
+    async def _connect(self) -> aiosqlite.Connection:
+        """Создать соединение SQLite с безопасными pragma."""
+        db = await aiosqlite.connect(self._db_path)
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA busy_timeout=5000")
+        return db
+
     async def _ensure_db(self) -> None:
         """Создать таблицы если их нет."""
         if self._initialized:
@@ -29,7 +36,7 @@ class SubscriptionRepository:
 
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
 
-        async with aiosqlite.connect(self._db_path) as db:
+        async with await self._connect() as db:
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS subscriptions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,7 +76,7 @@ class SubscriptionRepository:
         """
         await self._ensure_db()
         try:
-            async with aiosqlite.connect(self._db_path) as db:
+            async with await self._connect() as db:
                 await db.execute(
                     """
                     INSERT INTO subscriptions (user_telegram_id, team_id, team_name, league_id, league_name)
@@ -93,7 +100,7 @@ class SubscriptionRepository:
             True если подписка удалена, False если не найдена.
         """
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with await self._connect() as db:
             cursor = await db.execute(
                 "DELETE FROM subscriptions WHERE user_telegram_id = ? AND team_id = ?",
                 (user_telegram_id, team_id),
@@ -111,7 +118,7 @@ class SubscriptionRepository:
             Список словарей с данными подписок.
         """
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with await self._connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT * FROM subscriptions WHERE user_telegram_id = ? ORDER BY created_at DESC",
@@ -123,7 +130,7 @@ class SubscriptionRepository:
     async def is_subscribed(self, user_telegram_id: int, team_id: str) -> bool:
         """Проверить, подписан ли пользователь на команду."""
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with await self._connect() as db:
             async with db.execute(
                 "SELECT 1 FROM subscriptions WHERE user_telegram_id = ? AND team_id = ? LIMIT 1",
                 (user_telegram_id, team_id),
@@ -134,7 +141,7 @@ class SubscriptionRepository:
     async def get_subscribers_for_team(self, team_id: str) -> list[int]:
         """Получить всех подписчиков команды (для рассылки уведомлений)."""
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with await self._connect() as db:
             async with db.execute(
                 "SELECT user_telegram_id FROM subscriptions WHERE team_id = ?",
                 (team_id,),
@@ -145,7 +152,7 @@ class SubscriptionRepository:
     async def get_user_subscription_count(self, user_telegram_id: int) -> int:
         """Получить количество подписок пользователя."""
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with await self._connect() as db:
             async with db.execute(
                 "SELECT COUNT(*) FROM subscriptions WHERE user_telegram_id = ?",
                 (user_telegram_id,),
@@ -160,7 +167,7 @@ class SubscriptionRepository:
             Количество удалённых подписок.
         """
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with await self._connect() as db:
             cursor = await db.execute(
                 "DELETE FROM subscriptions WHERE user_telegram_id = ?",
                 (user_telegram_id,),

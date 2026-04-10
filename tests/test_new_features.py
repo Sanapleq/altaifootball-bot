@@ -6,8 +6,10 @@ from datetime import datetime, timedelta
 from app.models.football import (
     League, Match, Player, PlayerStat, StandingRow, Team, MatchPrediction,
 )
+from app.keyboards.callbacks import parse_callback_multi_safe
 from app.services.formatter import FootballFormatter
 from app.services.football_service import FootballService
+from app.utils.text import normalize_team_name
 
 
 # ====================================================================
@@ -727,6 +729,32 @@ class TestPredictionReliableH2H:
         assert prediction.h2h_away_wins == 1
 
 
+class TestCallbackSafety:
+    """Тесты безопасного разбора callback payload."""
+
+    def test_parse_callback_multi_safe_valid(self) -> None:
+        parts = parse_callback_multi_safe("teams_page:3607:2", min_parts=3)
+        assert parts == ["teams_page", "3607", "2"]
+
+    def test_parse_callback_multi_safe_invalid(self) -> None:
+        parts = parse_callback_multi_safe("teams_page:3607", min_parts=3)
+        assert parts is None
+
+
+class TestTeamNameNormalization:
+    """Тесты нормализации имен для поиска/сопоставления."""
+
+    def test_normalize_team_name_quotes_and_yo(self) -> None:
+        a = normalize_team_name('"СКА" ЗАТО Сибирский')
+        b = normalize_team_name("СКА ЗАТО Сибирский")
+        assert a == b
+
+    def test_normalize_team_name_case_and_spaces(self) -> None:
+        a = normalize_team_name("  GM  SPORT 22   Барнаул ")
+        b = normalize_team_name("gm sport 22 барнаул")
+        assert a == b
+
+
 class TestTeamMatchesPriority:
     """Тесты приоритета подтверждённых матчей над fallback."""
 
@@ -791,3 +819,40 @@ class TestTeamMatchesPriority:
         ids = {m.id for m in matches}
         assert "boxscore_1" in ids
         assert "fallback_2" in ids
+
+
+class TestPredictionDiagnostics:
+    """Тесты диагностического отчёта по источникам прогноза."""
+
+    @pytest.mark.asyncio
+    async def test_prediction_diagnostics_contains_match_sources(self) -> None:
+        svc = FootballService()
+        team = Team(id="1", name="СКА", url="https://example.com/teams/1/", league_id="L1")
+        opponent = Team(id="2", name="GM", url="https://example.com/teams/2/", league_id="L1")
+
+        upcoming = Match(id="preview_10", home_team="СКА", away_team="GM", status="scheduled")
+        recent_team = Match(id="boxscore_11", home_team="СКА", away_team="X", home_score=1, away_score=0, status="finished")
+        recent_opp = Match(id="boxscore_12", home_team="GM", away_team="СКА", home_score=2, away_score=1, status="finished")
+
+        async def _get_team_upcoming_matches(_team: Team):
+            return [upcoming]
+
+        async def _get_team_recent_results(arg_team: Team):
+            return [recent_team] if arg_team.id == "1" else [recent_opp]
+
+        async def _find_team_in_league(_name: str, _league_id: str):
+            return opponent
+
+        async def _find_team_by_name(_name: str):
+            return opponent
+
+        svc.get_team_upcoming_matches = _get_team_upcoming_matches  # type: ignore[assignment]
+        svc.get_team_recent_results = _get_team_recent_results  # type: ignore[assignment]
+        svc._find_team_in_league = _find_team_in_league  # type: ignore[assignment]
+        svc._find_team_by_name = _find_team_by_name  # type: ignore[assignment]
+
+        diag = await svc.get_prediction_diagnostics(team)
+        assert diag is not None
+        assert diag["next_match"]["source"] == "preview"
+        assert diag["team_recent_sources"][0]["source"] == "boxscore"
+        assert diag["opponent_recent_sources"][0]["source"] == "boxscore"

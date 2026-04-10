@@ -71,6 +71,26 @@ ALL_FIXTURES: list[FixtureURL] = [
         "/tournaments/2026/3607/teams/6659/",
         "Товарка 22 Барнаул — матчи (ещё одна команда)",
     ),
+    FixtureURL(
+        "team_6734.html",
+        "/tournaments/2026/3607/teams/6734/",
+        "Libertas NEO STAR's Барнаул — матчи",
+    ),
+    FixtureURL(
+        "team_5628.html",
+        "/tournaments/2026/3607/teams/5628/",
+        "АТТ фермер Алейск — матчи",
+    ),
+    FixtureURL(
+        "team_6377.html",
+        "/tournaments/2026/3607/teams/6377/",
+        "ASM Group Барнаул — матчи",
+    ),
+    FixtureURL(
+        "team_6281.html",
+        "/tournaments/2026/3607/teams/6281/",
+        "Барнаульский завод АТИ Барнаул — матчи",
+    ),
 
     # ── Заявка команды (roster) ───────────────────────────────
     FixtureURL(
@@ -161,17 +181,17 @@ async def save_fixtures(fixtures: list[FixtureURL], force: bool = False) -> dict
             results[fixture.filename] = "ok"
             print(f"[  OK  ] {fixture.filename}")
             print(f"        {fixture.description}")
-            print(f"        → {len(html):,} bytes")
+            print(f"        -> {len(html):,} bytes")
         except PageLoaderError as e:
             results[fixture.filename] = f"fail: {e}"
             print(f"[FAIL  ] {fixture.filename}")
             print(f"        {fixture.description}")
-            print(f"        → Ошибка: {e}")
+            print(f"        -> Ошибка: {e}")
         except Exception as e:
             results[fixture.filename] = f"error: {type(e).__name__}: {e}"
             print(f"[ERROR ] {fixture.filename}")
             print(f"        {fixture.description}")
-            print(f"        → {type(e).__name__}: {e}")
+            print(f"        -> {type(e).__name__}: {e}")
         print()
 
     await loader.close()

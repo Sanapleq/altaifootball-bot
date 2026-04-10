@@ -23,6 +23,13 @@ class UserRepository:
         self._db_path = db_path or settings.db_path
         self._initialized = False
 
+    async def _connect(self) -> aiosqlite.Connection:
+        """Создать соединение SQLite с безопасными pragma."""
+        db = await aiosqlite.connect(self._db_path)
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA busy_timeout=5000")
+        return db
+
     async def _ensure_db(self) -> None:
         """Создать таблицы если их нет."""
         if self._initialized:
@@ -30,7 +37,7 @@ class UserRepository:
 
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
 
-        async with aiosqlite.connect(self._db_path) as db:
+        async with await self._connect() as db:
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS user_states (
                     telegram_id INTEGER PRIMARY KEY,
@@ -53,7 +60,7 @@ class UserRepository:
             Кортеж (league_id, league_name) или None.
         """
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with await self._connect() as db:
             async with db.execute(
                 "SELECT selected_league_id, selected_league_name FROM user_states WHERE telegram_id = ?",
                 (telegram_id,),
@@ -64,7 +71,7 @@ class UserRepository:
     async def set_selected_league(self, telegram_id: int, league_id: str, league_name: str) -> None:
         """Сохранить выбранную лигу."""
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with await self._connect() as db:
             await db.execute(
                 """
                 INSERT INTO user_states (telegram_id, selected_league_id, selected_league_name, updated_at)
@@ -85,7 +92,7 @@ class UserRepository:
             Кортеж (team_id, team_name) или None.
         """
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with await self._connect() as db:
             async with db.execute(
                 "SELECT selected_team_id, selected_team_name FROM user_states WHERE telegram_id = ?",
                 (telegram_id,),
@@ -96,7 +103,7 @@ class UserRepository:
     async def set_selected_team(self, telegram_id: int, team_id: str, team_name: str) -> None:
         """Сохранить выбранную команду."""
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with await self._connect() as db:
             await db.execute(
                 """
                 INSERT INTO user_states (telegram_id, selected_team_id, selected_team_name, updated_at)
@@ -113,7 +120,7 @@ class UserRepository:
     async def clear_selection(self, telegram_id: int) -> None:
         """Очистить выбор пользователя."""
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with await self._connect() as db:
             await db.execute(
                 """
                 UPDATE user_states SET
@@ -131,7 +138,7 @@ class UserRepository:
     async def clear_all(self) -> None:
         """Очистить все состояния (для отладки)."""
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with await self._connect() as db:
             await db.execute("DELETE FROM user_states")
             await db.commit()
         logger.info("Все пользовательские состояния очищены")

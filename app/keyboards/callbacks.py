@@ -34,3 +34,19 @@ def parse_callback_multi(callback_data: str) -> list[str]:
         Список частей.
     """
     return callback_data.split(":")
+
+
+def parse_callback_multi_safe(callback_data: str, min_parts: int) -> Optional[list[str]]:
+    """Безопасно распарсить callback с несколькими параметрами.
+
+    Args:
+        callback_data: Строка callback.
+        min_parts: Минимальное количество частей после split.
+
+    Returns:
+        Список частей или None, если формат некорректен.
+    """
+    parts = callback_data.split(":")
+    if len(parts) < min_parts:
+        return None
+    return parts

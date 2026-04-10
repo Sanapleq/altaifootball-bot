@@ -55,6 +55,12 @@ pip install -r requirements.txt
 
 ### 4. Настройте `.env`
 
+**Windows (PowerShell):**
+```bash
+copy .env.example .env
+```
+
+**Linux/macOS:**
 ```bash
 cp .env.example .env
 ```
@@ -156,6 +162,8 @@ tests/fixtures/
     ├── team_6662.html           # GM SPORT 22 Барнаул
     ├── team_5790.html           # СКА Сибирский ЗАТО
     ├── team_6659.html           # Товарка 22 Барнаул
+    ├── team_6734.html           # Libertas NEO STAR's Барнаул
+    ├── team_5628.html           # АТТ фермер Алейск
     ├── team_6662_roster.html    # GM SPORT 22 — заявка
     ├── team_5790_roster.html    # СКА — заявка
     ├── team_6662_stats.html     # GM SPORT 22 — статистика
@@ -181,9 +189,31 @@ python -m tests.fixtures.save_site_html --list
 ### Запуск тестов
 
 ```bash
-pytest tests/ -v          # все тесты
-pytest tests/test_fixtures.py -v  # fixture-тесты
+python -m pytest tests/ -v          # все тесты
+python -m pytest tests/test_fixtures.py -v  # fixture-тесты
 ```
+
+### Диагностика прогноза (источники матчей)
+
+```bash
+python -m scripts.prediction_diagnostics --team "СКА Сибирский ЗАТО" --league-id 3607
+```
+
+Скрипт печатает JSON с источниками данных для прогноза:
+- ближайший матч (`preview/boxscore/fallback`)
+- последние матчи обеих команд с источниками
+- источник H2H (`boxscore` или `mixed`)
+
+### Sanity-check лиги (W/D/L vs таблица)
+
+```bash
+python -m scripts.check_league_consistency --league-id 3607
+```
+
+Скрипт сравнивает W/D/L по командным fixtures с таблицей выбранной лиги:
+- проверяет все команды, для которых есть `team_<id>.html`
+- показывает `missing_fixtures` и `mismatches`
+- возвращает код `0`, если всё ок, иначе `1`
 
 ## Структура проекта
 

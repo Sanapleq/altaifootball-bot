@@ -362,7 +362,12 @@ class PageLoader:
         # 2. Пробуем curl_cffi (промежуточный fallback)
         if self._use_curl_cffi:
             try:
-                if last_error.status_code in _FALLBACK_CODES or last_error.status_code is None:
+                is_empty_html_error = "Пустая страница" in str(last_error)
+                if (
+                    last_error.status_code in _FALLBACK_CODES
+                    or last_error.status_code is None
+                    or is_empty_html_error
+                ):
                     logger.info("Пробую curl_cffi fallback для %s (httpx ошибка: %s)", url, last_error)
                     return await self._fetch_via_curl_cffi(url)
             except PageLoaderError as e:

@@ -91,3 +91,17 @@ def clean_text(text: str) -> str:
     # Заменяем несколько пробелов на один
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def normalize_team_name(name: str) -> str:
+    """Нормализовать имя команды для поиска и сопоставления.
+
+    Убирает лишние пробелы/кавычки, приводит ё->е и нижнему регистру.
+    """
+    if not name:
+        return ""
+    name = clean_text(name).lower().replace("ё", "е")
+    name = name.replace('"', "").replace("«", "").replace("»", "").replace("'", "")
+    name = re.sub(r"[^\w\s\-]", " ", name, flags=re.UNICODE)
+    name = re.sub(r"\s+", " ", name).strip()
+    return name

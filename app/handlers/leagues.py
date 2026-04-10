@@ -13,7 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 import app.dependencies as deps
-from app.keyboards.callbacks import parse_callback, parse_callback_multi
+from app.keyboards.callbacks import parse_callback, parse_callback_multi_safe
 from app.keyboards.main import (
     get_league_menu_keyboard,
     get_leagues_inline_keyboard,
@@ -433,8 +433,8 @@ async def cb_league_teams(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("teams_page:"))
 async def cb_teams_page(callback: CallbackQuery, state: FSMContext) -> None:
     """Пагинация списка команд."""
-    parts = parse_callback_multi(callback.data)
-    if len(parts) < 3:
+    parts = parse_callback_multi_safe(callback.data, min_parts=3)
+    if parts is None:
         await callback.answer("Некорректные данные пагинации", show_alert=True)
         return
     league_id = parts[1]

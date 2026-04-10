@@ -13,6 +13,7 @@ from app.logger import logger
 from app.models.football import League, Match, StandingRow, Team
 from app.services.cache import cache
 from app.services.parser import SiteParser, SiteParserError
+from app.utils.text import normalize_team_name
 
 
 class FootballService:
@@ -275,8 +276,9 @@ class FootballService:
             return None
 
         standings = await self.get_league_standings(target_league)
+        team_norm = normalize_team_name(team.name)
         for row in standings:
-            if row.team_name.lower() == team.name.lower():
+            if normalize_team_name(row.team_name) == team_norm:
                 return row
 
         return None
@@ -591,6 +593,73 @@ class FootballService:
             prediction_text=prediction_text,
         )
 
+    async def get_prediction_diagnostics(self, team: Team) -> Optional[dict]:
+        """Вернуть диагностику источников данных для прогноза.
+
+        Полезно для отладки: показывает, из каких источников собраны
+        ближайший матч, форма и H2H (boxscore/preview/fallback).
+        """
+        upcoming = await self.get_team_upcoming_matches(team)
+        if not upcoming:
+            return None
+
+        preview_upcoming = [m for m in upcoming if self._match_source(m) == "preview"]
+        next_match = preview_upcoming[0] if preview_upcoming else upcoming[0]
+        opponent_name = (
+            next_match.away_team
+            if next_match.home_team.lower() == team.name.lower()
+            else next_match.home_team
+        )
+
+        opponent: Optional[Team] = None
+        if team.league_id:
+            opponent = await self._find_team_in_league(opponent_name, team.league_id)
+        if opponent is None:
+            opponent = await self._find_team_by_name(opponent_name)
+
+        team_results_raw = await self.get_team_recent_results(team)
+        opponent_results_raw = await self.get_team_recent_results(opponent) if opponent else []
+        team_results = self._select_reliable_results_for_prediction(team_results_raw)
+        opponent_results = self._select_reliable_results_for_prediction(opponent_results_raw)
+
+        team_results_box = [m for m in team_results if self._match_source(m) == "boxscore"]
+        opponent_results_box = [m for m in opponent_results if self._match_source(m) == "boxscore"]
+        h2h = await self._get_head_to_head(team_results_box, opponent_results_box, team.name, opponent_name)
+        h2h_source = "boxscore"
+        if h2h["total"] == 0:
+            h2h = await self._get_head_to_head(team_results, opponent_results, team.name, opponent_name)
+            h2h_source = "mixed"
+
+        def _serialize(matches: list[Match], max_items: int = 5) -> list[dict]:
+            out: list[dict] = []
+            for m in matches[:max_items]:
+                out.append(
+                    {
+                        "id": m.id,
+                        "source": self._match_source(m),
+                        "home_team": m.home_team,
+                        "away_team": m.away_team,
+                        "status": m.status,
+                        "score": f"{m.home_score}:{m.away_score}" if m.home_score is not None and m.away_score is not None else None,
+                    }
+                )
+            return out
+
+        return {
+            "team": team.name,
+            "opponent": opponent_name,
+            "next_match": {
+                "id": next_match.id,
+                "source": self._match_source(next_match),
+                "home_team": next_match.home_team,
+                "away_team": next_match.away_team,
+            },
+            "team_recent_sources": _serialize(team_results),
+            "opponent_recent_sources": _serialize(opponent_results),
+            "h2h_total": h2h["total"],
+            "h2h_source": h2h_source,
+        }
+
     def _select_reliable_results_for_prediction(self, results: list[Match]) -> list[Match]:
         """Отобрать матчи для прогноза.
 
@@ -602,17 +671,31 @@ class FootballService:
             return reliable
         return results
 
+    def _match_source(self, match: Match) -> str:
+        """Определить источник матча по ID."""
+        if match.id.startswith("boxscore_"):
+            return "boxscore"
+        if match.id.startswith("preview_"):
+            return "preview"
+        return "fallback"
+
     async def _find_team_in_league(self, name: str, league_id: str) -> Optional[Team]:
         """Найти команду внутри конкретной лиги (быстрый путь)."""
         if not name or name == "—":
             return None
+        name_norm = normalize_team_name(name)
         league = await self.get_league_by_id(league_id)
         if not league:
             return None
         try:
             teams = await self.get_league_teams(league)
             for t in teams:
-                if t.name.lower() == name.lower():
+                if normalize_team_name(t.name) == name_norm:
+                    return t
+            # Мягкий fallback: вхождение для несовпадающих кавычек/форм.
+            for t in teams:
+                t_norm = normalize_team_name(t.name)
+                if name_norm and (name_norm in t_norm or t_norm in name_norm):
                     return t
         except Exception:
             pass
@@ -622,13 +705,18 @@ class FootballService:
         """Найти команду по имени через все лиги (fallback)."""
         if not name or name == "—":
             return None
+        name_norm = normalize_team_name(name)
 
         leagues = await self.get_leagues()
         for league in leagues:
             try:
                 teams = await self.get_league_teams(league)
                 for t in teams:
-                    if t.name.lower() == name.lower():
+                    if normalize_team_name(t.name) == name_norm:
+                        return t
+                for t in teams:
+                    t_norm = normalize_team_name(t.name)
+                    if name_norm and (name_norm in t_norm or t_norm in name_norm):
                         return t
             except Exception:
                 continue
@@ -665,7 +753,7 @@ class FootballService:
         seen_matches: set[str] = set()
 
         def _norm_name(name: str) -> str:
-            return " ".join(name.strip().lower().split())
+            return normalize_team_name(name)
 
         for match in team_results + opponent_results:
             if match.home_score is None or match.away_score is None:
@@ -741,12 +829,12 @@ class FootballService:
         total_scored = 0
         total_conceded = 0
 
-        team_norm = " ".join(team_name.strip().lower().split())
+        team_norm = normalize_team_name(team_name)
 
         for m in results:
             if m.home_score is not None and m.away_score is not None:
-                home_norm = " ".join(m.home_team.strip().lower().split())
-                away_norm = " ".join(m.away_team.strip().lower().split())
+                home_norm = normalize_team_name(m.home_team)
+                away_norm = normalize_team_name(m.away_team)
 
                 if home_norm != team_norm and away_norm != team_norm:
                     # Пропускаем матч, если команда в нём явно не участвует.
