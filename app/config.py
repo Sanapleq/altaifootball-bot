@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # Debug
     debug_save_html: bool = Field(default=False, alias="DEBUG_SAVE_HTML")
     use_playwright_fallback: bool = Field(default=False, alias="USE_PLAYWRIGHT_FALLBACK")
+    use_curl_cffi: bool = Field(default=True, alias="USE_CURL_CFFI")
 
 
 # Глобальный экземпляр настроек

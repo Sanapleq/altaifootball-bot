@@ -20,6 +20,8 @@ from app.keyboards.main import (
     get_main_back_keyboard,
     get_main_keyboard,
     get_search_results_keyboard,
+    get_seasons_keyboard,
+    get_seasons_list_keyboard,
     get_subscriptions_keyboard,
     get_team_back_keyboard,
     get_team_menu_keyboard,
@@ -119,8 +121,9 @@ async def _get_team_from_state_or_search(
 
     Логика (по приоритету):
     1. Если selected_team в state и ID совпадает — берём из кэша.
-    2. Если selected_league_id есть — ищем только в этой лиге.
-    3. Fallback: ищем через все лиги.
+    2. Если teams_list в state — ищем там (один запрос не нужен).
+    3. Если selected_league_id есть — ищем только в этой лиге.
+    4. Fallback: ищем через все лиги (тяжёлый).
     """
     state_data = await state.get_data()
     team: Team | None = state_data.get("selected_team")
@@ -129,7 +132,13 @@ async def _get_team_from_state_or_search(
     if team is not None and team.id == team_id:
         return team
 
-    # 2. Пробуем найти в сохранённой лиге (один запрос вместо N)
+    # 2. Ищем в кэшированном списке команд (быстро, без запросов)
+    teams_list: list[Team] = state_data.get("teams_list", [])
+    for t in teams_list:
+        if t.id == team_id:
+            return t
+
+    # 3. Пробуем найти в сохранённой лиге (один запрос вместо N)
     league_id = state_data.get("selected_league_id")
     if league_id:
         league = await deps.football_service.get_league_by_id(league_id)
@@ -142,7 +151,7 @@ async def _get_team_from_state_or_search(
             except Exception:
                 pass
 
-    # 3. Fallback: сканируем все лиги
+    # 4. Fallback: сканируем все лиги (тяжёлый)
     return await _find_team_by_id(team_id)
 
 
@@ -200,29 +209,130 @@ async def cb_back_to_main(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
+# ── Сезоны ─────────────────────────────────────────────────────────
+
+
+@router.callback_query(F.data == "back_to_seasons")
+async def cb_back_to_seasons(callback: CallbackQuery, state: FSMContext) -> None:
+    """Вернуться к выбору сезонов."""
+    from datetime import datetime
+    current_year = str(datetime.now().year)
+
+    await state.set_state(MainStates.viewing_leagues)
+    await _safe_edit_text(
+        callback,
+        "⚽ <b>Выберите сезон</b>\n\n"
+        "📅 Текущий сезон — активные турниры\n"
+        "🗂 Выбрать сезон — все доступные сезоны\n"
+        "🕘 Архив — прошлые сезоны",
+        reply_markup=get_seasons_keyboard([], current_year),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("season_current:"))
+async def cb_season_current(callback: CallbackQuery, state: FSMContext) -> None:
+    """Показать турниры текущего сезона."""
+    from datetime import datetime
+    current_year = str(datetime.now().year)
+
+    await callback.message.edit_text("⏳ Загрузка турниров текущего сезона...")
+
+    leagues = await deps.football_service.get_current_season_leagues()
+    if not leagues:
+        await callback.message.answer(
+            f"😔 Не найдено турниров за {current_year}.\n"
+            "Попробуйте выбрать другой сезон.",
+            reply_markup=get_seasons_keyboard([], current_year),
+        )
+        await callback.answer()
+        return
+
+    await state.update_data(selected_season=current_year)
+    await state.set_state(MainStates.viewing_leagues)
+
+    await _safe_edit_text(
+        callback,
+        FootballFormatter.format_leagues_list(leagues, f"Текущий сезон {current_year}"),
+        reply_markup=get_leagues_inline_keyboard(leagues),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("season_list:"))
+async def cb_season_list(callback: CallbackQuery, state: FSMContext) -> None:
+    """Показать список всех сезонов или архив."""
+    _, mode = parse_callback(callback.data)
+
+    await callback.message.edit_text("⏳ Загрузка списка сезонов...")
+
+    if mode == "archive":
+        seasons = await deps.football_service.get_archive_seasons()
+        title = "🕘 Архив сезонов"
+    else:
+        seasons = await deps.football_service.get_available_seasons()
+        title = "🗂 Все сезоны"
+
+    if not seasons:
+        await callback.message.answer(
+            "😔 Не удалось загрузить список сезонов.",
+            reply_markup=get_seasons_keyboard([], "2026"),
+        )
+        await callback.answer()
+        return
+
+    await _safe_edit_text(
+        callback,
+        f"<b>{title}</b>\n\nДоступно сезонов: {len(seasons)}",
+        reply_markup=get_seasons_list_keyboard(seasons, mode),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("season_select:"))
+async def cb_season_select(callback: CallbackQuery, state: FSMContext) -> None:
+    """Выбрать конкретный сезон."""
+    _, season = parse_callback(callback.data)
+
+    await callback.message.edit_text(f"⏳ Загрузка турниров за {season}...")
+
+    leagues = await deps.football_service.get_leagues_by_season(season)
+    if not leagues:
+        await callback.message.answer(
+            f"😔 Не найдено турниров за {season}.",
+            reply_markup=get_seasons_list_keyboard([], "all"),
+        )
+        await callback.answer()
+        return
+
+    await state.update_data(selected_season=season)
+    await state.set_state(MainStates.viewing_leagues)
+
+    await _safe_edit_text(
+        callback,
+        FootballFormatter.format_leagues_list(leagues, f"Сезон {season}"),
+        reply_markup=get_leagues_inline_keyboard(leagues),
+    )
+    await callback.answer()
+
+
 # ── Лиги ───────────────────────────────────────────────────────────
 
 
 @router.message(F.text == "🏆 Лиги")
 async def show_leagues_from_menu(message: Message, state: FSMContext) -> None:
-    """Показать список лиг из текстовой кнопки."""
-    msg = await message.answer("⏳ Загрузка списка лиг...")
+    """Показать меню выбора сезонов из текстовой кнопки."""
+    from datetime import datetime
+    current_year = str(datetime.now().year)
 
-    leagues_list = await deps.football_service.get_leagues()
-
-    if not leagues_list:
-        await message.answer(
-            "😔 Не удалось загрузить список лиг.\n"
-            "Проверьте доступность сайта altaifootball.ru и попробуйте позже.",
-            reply_markup=get_main_keyboard(),
-        )
-        return
-
-    await message.answer(
-        FootballFormatter.format_leagues_list(leagues_list),
-        reply_markup=get_leagues_inline_keyboard(leagues_list),
-    )
     await state.set_state(MainStates.viewing_leagues)
+    await message.answer(
+        "⚽ <b>Выберите сезон</b>\n\n"
+        "📅 <b>Текущий сезон</b> — активные турниры\n"
+        "🗂 <b>Выбрать сезон</b> — все доступные сезоны\n"
+        "🕘 <b>Архив</b> — прошлые сезоны",
+        reply_markup=get_seasons_keyboard([], current_year),
+    )
 
 
 @router.callback_query(F.data.startswith("league:"))
@@ -991,6 +1101,88 @@ async def handle_results_button(message: Message) -> None:
             results, f"Последние результаты: {league.name}"
         )
     )
+
+
+# ── Заявка и статистика команды ────────────────────────────────────
+
+
+@router.callback_query(F.data.startswith("team_roster:"))
+async def cb_team_roster(callback: CallbackQuery, state: FSMContext) -> None:
+    """Заявка команды."""
+    _, team_id = parse_callback(callback.data)
+    await callback.message.edit_text("⏳ Загрузка заявки...")
+
+    team = await _get_team_from_state_or_search(team_id, state)
+    if team is None:
+        await message_answer_fallback(callback, "😔 Не удалось найти команду.")
+        return
+
+    roster = await deps.football_service.get_team_roster(team)
+
+    # Определяем название лиги для отображения
+    league_name = None
+    if team.league_id:
+        league = await deps.football_service.get_league_by_id(team.league_id)
+        if league:
+            league_name = league.name
+
+    await _safe_edit_text(
+        callback,
+        FootballFormatter.format_team_roster(roster, team.name),
+        reply_markup=get_team_back_keyboard(team.league_id or ""),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("team_player_stats:"))
+async def cb_team_player_stats(callback: CallbackQuery, state: FSMContext) -> None:
+    """Статистика игроков команды."""
+    _, team_id = parse_callback(callback.data)
+    await callback.message.edit_text("⏳ Загрузка статистики игроков...")
+
+    team = await _get_team_from_state_or_search(team_id, state)
+    if team is None:
+        await message_answer_fallback(callback, "😔 Не удалось найти команду.")
+        return
+
+    player_stats = await deps.football_service.get_team_player_stats(team)
+
+    await _safe_edit_text(
+        callback,
+        FootballFormatter.format_team_player_stats(player_stats, team.name),
+        reply_markup=get_team_back_keyboard(team.league_id or ""),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("team_prediction:"))
+async def cb_team_prediction(callback: CallbackQuery, state: FSMContext) -> None:
+    """Прогноз на ближайший матч команды."""
+    _, team_id = parse_callback(callback.data)
+    await callback.message.edit_text("⏳ Анализ формы команд...")
+
+    team = await _get_team_from_state_or_search(team_id, state)
+    if team is None:
+        await message_answer_fallback(callback, "😔 Не удалось найти команду.")
+        return
+
+    prediction = await deps.football_service.get_team_match_prediction(team)
+    if prediction is None:
+        await callback.message.answer(
+            f"🤖 <b>Прогноз</b>\n{escape_html(team.name)}\n\n"
+            "😔 Не удалось составить прогноз:\n"
+            "нет предстоящих матчей или недостаточно данных.",
+            reply_markup=get_team_back_keyboard(team.league_id or ""),
+        )
+        await callback.answer()
+        return
+
+    await _safe_edit_text(
+        callback,
+        FootballFormatter.format_match_prediction(prediction),
+        reply_markup=get_team_back_keyboard(team.league_id or ""),
+    )
+    await callback.answer()
 
 
 # ── Утилиты ────────────────────────────────────────────────────────

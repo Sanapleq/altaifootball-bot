@@ -12,7 +12,27 @@
       "Bash(git init)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(.venv\\scripts\\python.exe *)"
+      "Bash(.venv\\scripts\\python.exe *)",
+      "Bash(.venv\\scripts\\python.exe)",
+      "Bash(from *)",
+      "Bash(parser *)",
+      "Bash(html *)",
+      "Bash('tests/fixtures/team_5790.html')",
+      "Bash(.read_text)",
+      "Bash(soup *)",
+      "Bash(html, *)",
+      "Bash(team_name *)",
+      "Bash(rows *)",
+      "Bash('tr')",
+      "Bash(header *)",
+      "Bash(clean_text)",
+      "Bash(print)",
+      "Bash(m *)",
+      "Bash(row, *)",
+      "Bash(elif *)",
+      "Bash(else: *)",
+      "Bash(break)",
+      "Bash(eof)"
     ]
   },
   "$version": 3

@@ -46,6 +46,14 @@ try:
 except ImportError:
     _DEBUG_AVAILABLE = False
 
+# selectolax — быстрый CSS-парсер (основной для простых извлечений)
+try:
+    from selectolax.parser import HTMLParser as SelectolaxParser
+    _SELECTOLAX_AVAILABLE = True
+except ImportError:
+    _SELECTOLAX_AVAILABLE = False
+    SelectolaxParser = None  # type: ignore[misc,assignment]
+
 
 def _debug_save(html: str, name: str, **kwargs) -> None:
     """Сохранить HTML для отладки если включён флаг."""
@@ -54,6 +62,41 @@ def _debug_save(html: str, name: str, **kwargs) -> None:
             save_debug_html(html, name, **kwargs)
         except Exception as e:
             logger.debug("Ошибка сохранения debug HTML: %s", e)
+
+
+def _fast_extract_links(html: str, pattern: str) -> list[tuple[str, str]]:
+    """Быстрое извлечение ссылок через selectolax.
+
+    Args:
+        html: HTML-строка.
+        pattern: CSS-селектор для ссылок (например 'a[href]').
+
+    Returns:
+        Список кортежей (href, text).
+    """
+    if _SELECTOLAX_AVAILABLE and SelectolaxParser is not None:
+        try:
+            tree = SelectolaxParser(html)
+            results = []
+            for node in tree.css(pattern):
+                href = node.attributes.get("href", "")
+                text = node.text(strip=True)
+                if href and text:
+                    results.append((href, text))
+            return results
+        except Exception:
+            pass  # Fallback to BS4
+
+    # Fallback: используем BS4
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "lxml")
+    results = []
+    for link in soup.select(pattern):
+        href = link.get("href", "")
+        text = link.get_text(strip=True)
+        if href and text:
+            results.append((href, text))
+    return results
 
 # ── Словарь мусорных текстов, которые НЕ должны попадать в данные ─────
 
@@ -285,7 +328,12 @@ class SiteParser:
 
         Returns:
             BeautifulSoup объект.
+
+        Raises:
+            SiteParserError: Если HTML пустой.
         """
+        if not html or len(html) < 100:
+            raise SiteParserError(f"Пустой HTML ({len(html) if html else 0} bytes)")
         return BeautifulSoup(html, "lxml")
 
     def _make_absolute_url(self, url: Optional[str]) -> str:
@@ -330,6 +378,9 @@ class SiteParser:
         /tournaments/{year}/{id}/ извлекаются как лиги.
         Это самый стабильный источник — сайт сам формирует этот список.
 
+        Использует selectolax для быстрого извлечения ссылок,
+        с fallback на BeautifulSoup.
+
         Returns:
             Список объектов League.
         """
@@ -337,10 +388,8 @@ class SiteParser:
 
         try:
             html = await self._fetch_page("/tournaments/")
-            soup = self._parse_html(html)
         except SiteParserError as e:
             logger.error("[leagues] Не удалось загрузить страницу: %s", e)
-            _debug_save(html if 'html' in dir() else "", "leagues_error", extra=str(e))
             return []
 
         logger.debug("[leagues] HTML размер: %d байт", len(html))
@@ -351,10 +400,15 @@ class SiteParser:
         # Извлекаем ВСЕ ссылки вида /tournaments/{year}/{id}/
         tournament_pattern = re.compile(r"/tournaments/\d+/\d+/$")
 
-        for link in soup.find_all("a", href=tournament_pattern):
-            href = link.get("href", "")
-            text = clean_text(link.get_text())
+        # Быстрое извлечение через selectolax (или BS4 fallback)
+        links = _fast_extract_links(html, "a[href]")
 
+        for href, text in links:
+            # Фильтруем только турнирные ссылки
+            if not tournament_pattern.search(href):
+                continue
+
+            text = clean_text(text)
             if not text or len(text) < 2:
                 logger.debug("[leagues] Пропущена ссылка без текста: %s", href)
                 continue
@@ -1015,11 +1069,21 @@ class SiteParser:
         """Распарсить строку матча из таблицы команды.
 
         Реальный формат на сайте (table_box_row):
-        Дата | Этап | Соперник | Счёт | (пусто) | (пусто) | Стадион
+        Дата | Этап | Соперник | Счёт | | Место(стадион)
 
-        Счёт содержит суффикс: 2:1В (В=победа), 3:7П (П=поражение), 1:1Н (Н=ничья).
-        По суффиксу определяем, была ли команда дома или в гостях.
-        Также есть ссылка на boxscore: /tournaments/boxscore/{id}/ или /boxscore/{id}/preview/
+        ВАЖНО: Счёт на странице команды показывается ОТ ЛИЦА КОМАНДЫ:
+          "2:1" = команда забила 2, пропустила 1 (независимо от home/away).
+        Суффикс: В = победа, П = поражение, Н = ничья.
+        Колонка «Место» содержит стадион, НЕ home/away.
+
+        Поэтому:
+          home_team = текущая команда (всегда)
+          away_team = соперник
+          home_score = голы текущей команды
+          away_score = голы соперника
+
+        Это корректно для _calc_form_metrics, который проверяет
+        m.home_team == team_name и использует home_score/away_score.
 
         Args:
             row: Тег <tr>.
@@ -1033,32 +1097,31 @@ class SiteParser:
         if len(cells) < 4:
             return None
 
-        # Дата — первая ячейка: "15.03.2026,Вс,16:00"
+        # Дата
         date_text = clean_text(cells[0].get_text())
         match_date = self._parse_team_date(date_text)
 
-        # Этап — вторая: "1 тур"
+        # Этап
         round_text = clean_text(cells[1].get_text()) if len(cells) > 1 else ""
 
-        # Соперник — третья: "АТТ фермерАлейск"
+        # Соперник
         opponent_raw = clean_text(cells[2].get_text()) if len(cells) > 2 else ""
         opponent_name = self._split_team_name(opponent_raw)
 
-        # Счёт — четвёртая: "2:1В" (В=победа), "3:7П" (П=поражение), "1:1Н" (Н=ничья), "?-?" (не сыгран)
+        # Счёт: "2:1В", "3:7П", "1:1Н", "?-?"
         score_raw = clean_text(cells[3].get_text()) if len(cells) > 3 else ""
 
         if not opponent_name or len(opponent_name) < 2:
             return None
 
-        # Определяем результат по суффиксу счёта
-        # В = победа текущей команды, П = поражение, Н = ничья
+        # Суффикс
         result_suffix = ""
         for ch in reversed(score_raw):
             if ch in ("В", "Н", "П"):
                 result_suffix = ch
                 break
 
-        # Извлекаем ссылку на boxscore из ячейки счёта
+        # Boxscore ссылка
         score_cell = cells[3]
         score_link = score_cell.find("a", href=True) if score_cell else None
         is_preview = False
@@ -1066,7 +1129,7 @@ class SiteParser:
             href = score_link.get("href", "")
             is_preview = "/preview/" in href
 
-        # Парсим счёт (убираем суффикс)
+        # Парсим счёт
         home_score: int | None = None
         away_score: int | None = None
         status = "scheduled"
@@ -1079,53 +1142,32 @@ class SiteParser:
         elif "+:-" in score_raw or "-:+" in score_raw:
             status = "finished"
         elif score_raw == "?-?":
-            # Матч ещё не сыгран, счёт неизвестен
             status = "scheduled" if match_date and match_date >= datetime.now() else "unknown"
 
-        # Определяем home/away по результату
-        # Если В (победа) — текущая команда забила больше → она home если счёт "нормальный"
-        # Но на сайте счёт всегда показывается как "забито:пропущено" для текущей команды
-        # Т.е. 2:1В = текущая команда забила 2, пропустила 1 → home_team = текущая
-        # На практике: на сайтеaltaifootball.ru счёт всегда показывается относительно
-        # текущей команды, независимо от home/away.
-        # Суффикс: В = победа, П = поражение, Н = ничья.
-        # Но нам нужно знать, была ли команда дома.
-        # На данной странице НЕТ явной колонки home/away.
-        # Стратегия: если матч завершён и есть boxscore (не preview) —
-        #   текущая команда = home если В/Н, away если П (грубая эвристика)
-        #   НО: это ненадёжно. Лучше — парсим boxscore.
-        #
-        # Упрощённый подход для текущей версии:
-        #   считаем текущую команду home_team всегда,
-        #   а соперника — away_team.
-        #   Это даст правильный вывод счёта (2:1 = наша команда забила 2).
-        #   Для будущего улучшения — можно парсить boxscore для точного home/away.
-
+        # ── home_team = текущая команда (всегда) ──
+        # Счёт на странице команды ВСЕГДА от её лица (забито:пропущено).
+        # Это НЕ фактический home:away матча.
         home_team = current_team_name if current_team_name else opponent_name
         away_team = opponent_name if current_team_name else "—"
 
         if not home_team or not away_team:
             return None
 
-        # Если нет счёта и нет даты — не матч
         if match_date is None and home_score is None:
             return None
 
-        # Определяем статус если нет счёта
         if home_score is None and match_date:
             if match_date < datetime.now():
                 status = "unknown"
             else:
                 status = "scheduled"
 
-        # Стадион — последняя непустая ячейка (обычно индекс 6 в данных)
+        # Стадион — последняя ячейка
         venue = ""
         if len(cells) > 4:
-            # Ищем последнюю непустую ячейку
             for ci in range(len(cells) - 1, 3, -1):
                 venue_text = clean_text(cells[ci].get_text())
                 if venue_text:
-                    # Убираем "Дома"/"Выезд" если есть
                     for keyword in ["Дома", "Выезд"]:
                         venue_text = venue_text.replace(keyword, "").strip()
                     if venue_text:
@@ -2248,3 +2290,305 @@ class SiteParser:
 
         logger.info(f"Найдено команд по запросу '{query}': {len(teams)}")
         return teams
+
+    # ========================================================================
+    # ЗАЯВКА КОМАНДЫ (ROSTER)
+    # ========================================================================
+
+    async def get_team_roster(self, team_url: str) -> list:
+        """Получить заявку (состав) команды.
+
+        URL заявки строится из URL команды:
+          /tournaments/{season}/{tournament_id}/teams/{team_id}/  →
+          /tournaments/{season}/{tournament_id}/teams/{team_id}/roster/
+
+        Args:
+            team_url: URL страницы команды.
+
+        Returns:
+            Список объектов Player.
+        """
+        from app.models.football import Player
+
+        roster_url = self._build_team_sub_url(team_url, "roster/")
+        if not roster_url:
+            return []
+
+        logger.info("[roster] Загрузка заявки команды: %s", roster_url)
+
+        try:
+            html = await self._fetch_page(roster_url)
+            soup = self._parse_html(html)
+        except SiteParserError as e:
+            logger.error("[roster] Не удалось загрузить страницу: %s", e)
+            return []
+
+        logger.debug("[roster] HTML размер: %d байт", len(html))
+
+        players = self._parse_roster_table(soup)
+
+        if not players:
+            logger.warning("[roster] Не найдено игроков на странице")
+            _debug_save(html, "roster_empty", extra=roster_url)
+
+        logger.info("[roster] Найдено игроков: %d", len(players))
+        return players
+
+    def _build_team_sub_url(self, team_url: str, sub_path: str) -> str:
+        """Построить URL подраздела команды.
+
+        Из URL команды строит URL подраздела (roster, stats и т.д.):
+          /tournaments/2026/3607/teams/6662/  →  .../6662/roster/
+
+        Args:
+            team_url: URL страницы команды.
+            sub_path: Подраздел (например "roster/", "stats/").
+
+        Returns:
+            URL подраздела или пустая строка.
+        """
+        # Нормализуем — убираем trailing slash
+        url = team_url.rstrip("/")
+        # Проверяем что URL заканчивается на teams/{id}
+        if not re.search(r"/teams/\d+$", url):
+            logger.warning("[url_build] Не recognised team URL: %s", team_url)
+            return ""
+        return url + "/" + sub_path
+
+    def _parse_roster_table(self, soup: BeautifulSoup) -> list:
+        """Распарсить таблицу заявки команды.
+
+        Реальная структура (table_box_row):
+        № | Имя | Дата рождения | Возраст | Рост | Вес | Дата заявки | |
+
+        Амплуа определяется строками-разделителями:
+          <td class="bg_light ...">Вратари</td>
+          <td class="bg_light ...">Защитники</td>
+          <td class="bg_light ...">Нападающие</td>
+          <td class="bg_light ...">Полевые игроки</td>
+        """
+        from app.models.football import Player
+
+        players: list[Player] = []
+        current_position: str | None = None
+
+        for table in soup.find_all("table", class_="table_box_row"):
+            rows = table.find_all("tr")
+            if len(rows) < 2:
+                continue
+
+            # Проверяем что это таблица заявки (есть колонка "Имя")
+            header_cells = rows[0].find_all(["th", "td"])
+            has_name_col = any(
+                "имя" in clean_text(c.get_text()).lower()
+                for c in header_cells
+            )
+            if not has_name_col:
+                continue
+
+            for row in rows[1:]:
+                cells = row.find_all(["td", "th"])
+
+                # Строка-разделитель амплуа (colspan) — проверяем ДО len(cells) < 2
+                if len(cells) == 1 and cells[0].get("colspan"):
+                    pos_text = clean_text(cells[0].get_text())
+                    if pos_text and len(pos_text) < 30:
+                        current_position = pos_text
+                    continue
+
+                if len(cells) < 2:
+                    continue
+
+                # Обычная строка игрока
+                player = self._extract_player_from_roster_row(cells, current_position)
+                if player:
+                    players.append(player)
+
+            if players:
+                break  # Нашли правильную таблицу
+
+        return players
+
+    def _extract_player_from_roster_row(self, cells: list, position: str | None):
+        """Извлечь игрока из строки таблицы заявки.
+
+        Колонки: № | Имя | Дата рождения | Возраст | Рост | Вес | Дата заявки | |
+        """
+        from app.models.football import Player
+
+        def get_text(idx: int) -> str:
+            if idx < 0 or idx >= len(cells):
+                return ""
+            return clean_text(cells[idx].get_text())
+
+        def get_int(idx: int) -> int:
+            text = get_text(idx)
+            nums = re.findall(r"\d+", text)
+            return int(nums[0]) if nums else 0
+
+        # Имя — ссылка
+        name_link = cells[1].find("a", href=True) if len(cells) > 1 else None
+        name = clean_text(name_link.get_text()) if name_link else get_text(1)
+        if not name or len(name) < 2:
+            return None
+
+        # Номер
+        number = None
+        num_text = get_text(0).strip()
+        if num_text and num_text.isdigit():
+            number = int(num_text)
+
+        # Дата рождения
+        birth_date = None
+        birth_text = get_text(2)
+        if birth_text:
+            parsed = parse_russian_date(birth_text)
+            if parsed:
+                birth_date = parsed.date()
+
+        try:
+            return Player(
+                number=number,
+                name=name,
+                position=position,
+                birth_date=birth_date,
+                matches=0,
+                goals=0,
+            )
+        except Exception:
+            return None
+
+    # ========================================================================
+    # СТАТИСТИКА ИГРОКОВ КОМАНДЫ
+    # ========================================================================
+
+    async def get_team_player_stats(self, team_url: str) -> list:
+        """Получить статистику игроков команды.
+
+        URL статистики строится из URL команды:
+          /tournaments/{season}/{tournament_id}/teams/{team_id}/  →
+          /tournaments/{season}/{tournament_id}/teams/{team_id}/stats/
+
+        Args:
+            team_url: URL страницы команды.
+
+        Returns:
+            Список объектов PlayerStat.
+        """
+        from app.models.football import PlayerStat
+
+        stats_url = self._build_team_sub_url(team_url, "stats/")
+        if not stats_url:
+            return []
+
+        logger.info("[player_stats] Загрузка статистики: %s", stats_url)
+
+        try:
+            html = await self._fetch_page(stats_url)
+            soup = self._parse_html(html)
+        except SiteParserError as e:
+            logger.error("[player_stats] Не удалось загрузить страницу: %s", e)
+            return []
+
+        logger.debug("[player_stats] HTML размер: %d байт", len(html))
+
+        player_stats = self._parse_player_stats_table(soup)
+
+        if not player_stats:
+            logger.warning("[player_stats] Не найдено статистики")
+            _debug_save(html, "player_stats_empty", extra=stats_url)
+
+        logger.info("[player_stats] Найдено игроков со статистикой: %d", len(player_stats))
+        return player_stats
+
+    def _parse_player_stats_table(self, soup: BeautifulSoup) -> list:
+        """Распарсить таблицу статистики игроков.
+
+        Реальная структура (table_box_cell m_bottom):
+        Имя | Игр | Мин | Голы | Пен | НПен | КК | ЖК | Замены
+
+        Значения: <a href="...">4</a> или <span class="light">0</span>
+        или <span class="light"></span> (пусто).
+        """
+        from app.models.football import PlayerStat
+
+        stats: list[PlayerStat] = []
+        seen_names: set[str] = set()
+
+        for table in soup.find_all("table", class_="table_box_cell"):
+            rows = table.find_all("tr")
+            if len(rows) < 2:
+                continue
+
+            # Проверяем заголовок
+            header_cells = rows[0].find_all(["th", "td"])
+            has_name_col = any(
+                "имя" in clean_text(c.get_text()).lower()
+                for c in header_cells
+            )
+            if not has_name_col:
+                continue
+
+            # Парсим строки
+            for row in rows[1:]:
+                cells = row.find_all(["td", "th"])
+                if len(cells) < 2:
+                    continue
+
+                stat = self._extract_player_stat_from_stats_row(cells)
+                if stat and stat.name not in seen_names:
+                    stats.append(stat)
+                    seen_names.add(stat.name)
+
+            if stats:
+                break
+
+        return stats
+
+    def _extract_player_stat_from_stats_row(self, cells: list):
+        """Извлечь статистику из строки таблицы stats.
+
+        Колонки: Имя | Игр | Мин | Голы | Пен | НПен | КК | ЖК | Замены
+        """
+        from app.models.football import PlayerStat
+
+        def get_cell_value(idx: int) -> str:
+            """Получить текст из ячейки, предпочитая <a> над <span>."""
+            if idx < 0 or idx >= len(cells):
+                return ""
+            cell = cells[idx]
+            # Сначала ищем <a> с числом
+            link = cell.find("a")
+            if link:
+                text = link.get_text(strip=True)
+                if text:
+                    return text
+            # Затем <span>
+            span = cell.find("span")
+            if span:
+                return span.get_text(strip=True)
+            return clean_text(cell.get_text())
+
+        def get_int(idx: int) -> int:
+            text = get_cell_value(idx)
+            nums = re.findall(r"\d+", text)
+            return int(nums[0]) if nums else 0
+
+        # Имя — ссылка
+        name_link = cells[0].find("a", href=True) if len(cells) > 0 else None
+        name = clean_text(name_link.get_text()) if name_link else get_cell_value(0)
+        if not name or len(name) < 2:
+            return None
+
+        try:
+            return PlayerStat(
+                name=name,
+                matches=get_int(1),  # Игр
+                goals=get_int(3),    # Голы
+                assists=0,           # Нет на сайте
+                yellow_cards=get_int(7),  # ЖК
+                red_cards=get_int(6),     # КК
+                minutes=get_int(2),       # Мин
+            )
+        except Exception:
+            return None

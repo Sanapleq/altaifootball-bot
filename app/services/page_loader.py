@@ -1,9 +1,12 @@
 """Абстракция загрузки страниц.
 
-Основной режим: httpx + BeautifulSoup.
-Fallback режим: Playwright (для страниц, которые отдают JS-рендеринг).
+Pipeline (по приоритету):
+  1. httpx — быстрый основной бэкенд
+  2. curl_cffi — промежуточный fallback (TLS impersonation, 403/500/503)
+  3. Playwright — последний fallback (JS-рендеринг)
 
 Конфигурируется через настройки:
+    settings.use_curl_cffi = True   # по умолчанию True
     settings.use_playwright_fallback = False  # по умолчанию
 
 Использование:
@@ -149,14 +152,95 @@ class HttpxBackend(PageLoaderBackend):
 
 
 # ============================================================
-# Playwright бэкенд (fallback)
+# curl_cffi бэкенд (промежуточный fallback)
+# ============================================================
+
+class CurlCffiBackend(PageLoaderBackend):
+    """Бэкенд на базе curl_cffi — TLS impersonation браузеров.
+
+    Работает быстрее Playwright (нет headless-браузера).
+    Обходит Cloudflare и простые блокировки по User-Agent.
+    """
+
+    def __init__(self, timeout: int = 30) -> None:
+        self._timeout = timeout
+        self._session: Optional[object] = None
+
+    async def _get_session(self) -> object:
+        if self._session is None:
+            try:
+                from curl_cffi.requests import AsyncSession
+                self._session = AsyncSession(
+                    impersonate="chrome131",
+                    timeout=self._timeout,
+                )
+                logger.debug("curl_cffi сессия создана (impersonate=chrome131)")
+            except ImportError:
+                logger.warning("curl_cffi не установлен. Установите: pip install curl_cffi")
+                raise PageLoaderError("curl_cffi не установлен")
+        return self._session
+
+    async def fetch(self, url: str, base_url: str) -> str:
+        session = await self._get_session()
+        full_url = url if url.startswith("http") else base_url.rstrip("/") + "/" + url.lstrip("/")
+
+        logger.info("curl_cffi GET (fallback): %s", full_url)
+
+        try:
+            from curl_cffi.requests import AsyncSession
+
+            # curl_cffi AsyncSession работает синхронно для get,
+            # поэтому оборачиваем в executor
+            import concurrent.futures
+            loop = asyncio.get_event_loop()
+
+            def _sync_get() -> str:
+                # Создаём новую синхронную сессию для каждого запроса
+                from curl_cffi.requests import Session
+                with Session(impersonate="chrome131", timeout=self._timeout) as s:
+                    resp = s.get(full_url)
+                    resp.raise_for_status()
+                    return resp.text
+
+            html = await loop.run_in_executor(None, _sync_get)
+            html_len = len(html)
+
+            if html_len < 100:
+                logger.warning(
+                    "curl_cffi: пустой HTML (%d bytes): %s", html_len, full_url
+                )
+                raise PageLoaderError(
+                    f"curl_cffi вернул пустую страницу ({html_len} bytes)",
+                    status_code=200,
+                )
+
+            logger.debug("curl_cffi: %s (%d bytes)", full_url, html_len)
+            return html
+
+        except PageLoaderError:
+            raise
+        except Exception as e:
+            logger.error("curl_cffi ошибка при загрузке %s: %s", full_url, e)
+            raise PageLoaderError(f"curl_cffi ошибка при загрузке {full_url}: {e}")
+
+    async def close(self) -> None:
+        if self._session is not None:
+            try:
+                await self._session.close()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            self._session = None
+
+
+# ============================================================
+# Playwright бэкенд (последний fallback)
 # ============================================================
 
 class PlaywrightBackend(PageLoaderBackend):
     """Бэкенд на базе Playwright для JS-рендеринга страниц.
 
-    Используется как fallback для страниц, которые не отдают
-    нормальный HTML через httpx (например, требуют JS-рендеринга).
+    Используется как последний fallback для страниц, которые
+    не отдают нормальный HTML через httpx/curl_cffi.
     """
 
     def __init__(self) -> None:
@@ -179,7 +263,7 @@ class PlaywrightBackend(PageLoaderBackend):
         browser = await self._get_browser()
         full_url = url if url.startswith("http") else base_url.rstrip("/") + "/" + url.lstrip("/")
 
-        logger.info("Playwright GET (fallback): %s", full_url)
+        logger.info("Playwright GET (last fallback): %s", full_url)
 
         context = await browser.new_context(
             user_agent=(
@@ -229,11 +313,17 @@ class PageLoaderError(Exception):
         self.status_code = status_code
 
 
+# Коды ошибок, при которых пробуем fallback
+_FALLBACK_CODES = frozenset({403, 500, 502, 503, 504})
+
+
 class PageLoader:
     """Фасад загрузки страниц.
 
-    Основной режим: httpx.
-    При ошибке и включённом флаге USE_PLAYWRIGHT_FALLBACK — Playwright.
+    Pipeline:
+      1. httpx — основной бэкенд
+      2. curl_cffi — промежуточный fallback (403, пустой HTML, 5xx)
+      3. Playwright — последний fallback (JS-рендеринг)
     """
 
     def __init__(
@@ -243,11 +333,16 @@ class PageLoader:
     ) -> None:
         self._base_url = base_url or settings.base_url
         self._use_playwright = use_playwright_fallback or getattr(settings, "use_playwright_fallback", False)
+        self._use_curl_cffi = getattr(settings, "use_curl_cffi", True)  # по умолчанию True
         self._httpx = HttpxBackend(timeout=settings.request_timeout)
+        self._curl_cffi: Optional[CurlCffiBackend] = None
         self._playwright: Optional[PlaywrightBackend] = None
 
     async def fetch_page(self, url: str) -> str:
         """Загрузить HTML страницу.
+
+        Pipeline fallback:
+          httpx → curl_cffi → Playwright
 
         Args:
             url: Относительный или абсолютный URL.
@@ -258,14 +353,38 @@ class PageLoader:
         Raises:
             PageLoaderError: При ошибке загрузки.
         """
-        # Пробуем httpx
+        # 1. Пробуем httpx
         try:
             return await self._httpx.fetch(url, self._base_url)
         except PageLoaderError as e:
-            if self._use_playwright and e.status_code in (403, 500, 503):
-                logger.info("Переключаюсь на Playwright fallback для %s", url)
+            last_error = e
+
+        # 2. Пробуем curl_cffi (промежуточный fallback)
+        if self._use_curl_cffi:
+            try:
+                if last_error.status_code in _FALLBACK_CODES or last_error is not None:
+                    logger.info("Пробую curl_cffi fallback для %s (httpx ошибка: %s)", url, last_error)
+                    return await self._fetch_via_curl_cffi(url)
+            except PageLoaderError as e:
+                logger.warning("curl_cffi тоже не сработал для %s: %s", url, e)
+                last_error = e
+
+        # 3. Playwright (последний fallback)
+        if self._use_playwright:
+            try:
+                logger.info("Пробую Playwright fallback для %s", url)
                 return await self._fetch_via_playwright(url)
-            raise
+            except PageLoaderError as e:
+                logger.error("Все fallback'и провалились для %s", url)
+                last_error = e
+
+        raise last_error  # type: ignore[misc]
+
+    async def _fetch_via_curl_cffi(self, url: str) -> str:
+        """Fallback через curl_cffi."""
+        if self._curl_cffi is None:
+            self._curl_cffi = CurlCffiBackend(timeout=settings.request_timeout)
+        return await self._curl_cffi.fetch(url, self._base_url)
 
     async def _fetch_via_playwright(self, url: str) -> str:
         """Fallback через Playwright."""
@@ -276,5 +395,7 @@ class PageLoader:
     async def close(self) -> None:
         """Закрыть все бэкенды."""
         await self._httpx.close()
+        if self._curl_cffi:
+            await self._curl_cffi.close()
         if self._playwright:
             await self._playwright.close()

@@ -32,21 +32,83 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
 
 
 def get_leagues_inline_keyboard(leagues: list[League]) -> InlineKeyboardMarkup:
-    """Inline-клавиатура со списком лиг."""
+    """Inline-клавиатура со списком лиг (фильтруется по сезону)."""
     buttons: list[list[InlineKeyboardButton]] = []
     for league in leagues:
+        season_tag = f" ({league.season})" if league.season else ""
         buttons.append([
             InlineKeyboardButton(
-                text=league.name,
+                text=f"{league.name}{season_tag}",
                 callback_data=f"league:{league.id}"
             )
         ])
 
     buttons.append([
         InlineKeyboardButton(
-            text="⬅️ Назад",
-            callback_data="back_to_main"
+            text="⬅️ Назад к сезонам",
+            callback_data="back_to_seasons"
         )
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_seasons_keyboard(seasons: list[str], current_year: str) -> InlineKeyboardMarkup:
+    """Клавиатура выбора сезонов.
+
+    Структура:
+    📅 Текущий сезон (YYYY)
+    🗂 Выбрать сезон
+    🕘 Архив
+    ⬅️ Назад
+    """
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text=f"📅 Текущий сезон ({current_year})",
+                callback_data=f"season_current:{current_year}"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🗂 Выбрать сезон",
+                callback_data="season_list:all"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🕘 Архив",
+                callback_data="season_list:archive"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data="back_to_main"
+            ),
+        ],
+    ])
+
+
+def get_seasons_list_keyboard(seasons: list[str], mode: str) -> InlineKeyboardMarkup:
+    """Клавиатура со списком конкретных сезонов.
+
+    mode: 'all' — все сезоны, 'archive' — только архивные.
+    """
+    buttons: list[list[InlineKeyboardButton]] = []
+    for season in seasons:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"📆 {season}",
+                callback_data=f"season_select:{season}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="⬅️ Назад к сезонам",
+            callback_data="back_to_seasons"
+        ),
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -134,6 +196,8 @@ def get_team_menu_keyboard(team: Team, league_id: str, is_subscribed: bool = Fal
     Кнопки:
       📅 Ближайшие   🗓 Расписание
       🔥 Результаты  📊 Таблица
+      👥 Заявка      📈 Игроки
+      🤖 Прогноз
       🔔 Подписаться
       ⬅️ Назад
     """
@@ -158,6 +222,22 @@ def get_team_menu_keyboard(team: Team, league_id: str, is_subscribed: bool = Fal
             InlineKeyboardButton(
                 text="📊 Таблица",
                 callback_data=f"team_standing:{team.id}"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="👥 Заявка",
+                callback_data=f"team_roster:{team.id}"
+            ),
+            InlineKeyboardButton(
+                text="📈 Игроки",
+                callback_data=f"team_player_stats:{team.id}"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🤖 Прогноз",
+                callback_data=f"team_prediction:{team.id}"
             ),
         ],
         [

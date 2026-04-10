@@ -194,3 +194,81 @@ class StandingRow(BaseModel):
     @property
     def goal_difference(self) -> int:
         return self.goals_for - self.goals_against
+
+
+class Player(BaseModel):
+    """Модель игрока (заявка команды)."""
+
+    number: Optional[int] = None
+    name: str = Field(..., min_length=2)
+    position: Optional[str] = None  # амплуа
+    birth_date: Optional[date] = None
+    matches: int = 0
+    goals: int = 0
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 2:
+            raise ValueError(f"Слишком короткое имя игрока: '{v}'")
+        return v
+
+
+class PlayerStat(BaseModel):
+    """Модель статистики игрока."""
+
+    name: str = Field(..., min_length=2)
+    matches: int = 0
+    goals: int = 0
+    assists: int = 0
+    yellow_cards: int = 0
+    red_cards: int = 0
+    minutes: int = 0
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 2:
+            raise ValueError(f"Слишком короткое имя игрока: '{v}'")
+        return v
+
+
+class MatchPrediction(BaseModel):
+    """Модель прогноза на матч."""
+
+    home_team: str
+    away_team: str
+    match_date: Optional[datetime] = None
+
+    # Метрики домашней команды (за последние 5 матчей)
+    home_wins: int = 0
+    home_draws: int = 0
+    home_losses: int = 0
+    home_goals_scored: float = 0.0
+    home_goals_conceded: float = 0.0
+
+    # Метрики гостевой команды (за последние 5 матчей)
+    away_wins: int = 0
+    away_draws: int = 0
+    away_losses: int = 0
+    away_goals_scored: float = 0.0
+    away_goals_conceded: float = 0.0
+
+    # Личные встречи
+    h2h_total: int = 0
+    h2h_home_wins: int = 0
+    h2h_away_wins: int = 0
+    h2h_draws: int = 0
+    h2h_home_goals: int = 0
+    h2h_away_goals: int = 0
+
+    # Позиции в таблице
+    home_position: int = 0
+    away_position: int = 0
+
+    # Прогноз
+    predicted_home_score: int = 0
+    predicted_away_score: int = 0
+    prediction_text: str = ""

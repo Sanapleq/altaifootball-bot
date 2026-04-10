@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ru" lang="ru">
+<head>
+  <title>Турниры - Алтайский футбол</title>
+  <meta http-equiv="content-type" content="text/html; charset=utf-8" />
+  <link rel="stylesheet" type="text/css" href="/.styles/main.css?v=20201230" />
+<script language="javascript" type="text/javascript" src="/.scripts/main.js"></script><script language="javascript" type="text/javascript" src="/.scripts/jquery.js"></script>  <link rel="shortcut icon" href="/images/favicon.ico" />
+  <meta name="keywords" content="алтайский футбол, футбол, алтай, футбол алтая, барнаульский футбол, футбол барнаула, любительский футбол, чемпионат алтайского края, алтайский край, барнаул, спорт, статистика, чемпионат, турнир, динамо барнаул, фк барнаул, федерация футбола алтая, алтайская краевая федерация футбола, футбольный город, бгфф, акфф" />
+  <meta property="og:image" content="http://www.altaifootball.ru/images/altaifootball-300.png">
+<script type="text/javascript" src="//vk.com/js/api/openapi.js?105"></script>
+<script type="text/javascript">
+  VK.init({apiId: 4176142, onlyWidgets: true});
+</script>
+<style>
+  #promo-top {
+    width: 990px;
+    margin: 12px auto 6px auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, auto));
+    gap: 12px;
+  }
+  #promo-top div.promo-block {
+    background-color: #fafafb;
+    border-radius: 4px;
+    padding: 12px;
+    text-align: center;
+    font-size:12px;
+    box-shadow: 0px 1px 2px #eaeaeb;
+    display: flex;
+    flex-flow: column;
+    gap: 6px;
+  }
+  .promo-title {
+    font: bold 10pt 'Tahoma';
+    line-height: 1.4;
+    padding-bottom: 3px;
+  }
+  .promo-leagues {display:flex;font-size:10pt;gap:24px;}
+  .promo-leagues > * {flex:1;white-space:nowrap;}
+  .promo-leagues + .promo-title {margin-top:16px;}
+
+    html {
+        overflow-x: auto;
+        min-width: 1010px;
+    }
+    body {
+        background-image: url(/images/promo/nadawilli/bg.webp);
+        background-repeat: no-repeat;
+        background-size: cover;
+        background-position: center top;
+        background-attachment: fixed;
+        display: flex;
+        flex-flow: column;
+        gap: 5px;
+        width: 1010px;
+    }
+    #promo-header {
+        padding: 10px;
+        height: 110px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: center;
+        gap: 10px 0;
+        box-sizing: border-box;
+    }
+    #promo-header-i {
+        height: 55px;
+        width: 55px;
+        background-image: url(/images/promo/nadawilli/logo00.png);
+        background-repeat: no-repeat;
+        background-size: cover;
+        background-position: center;
+        filter: drop-shadow(0 0 6px #000);
+    }
+    #promo-header-l {
+        height: 55px;
+        width: 177px;
+        background-image: url(/images/promo/nadawilli/logo01.png);
+        background-repeat: no-repeat;
+        background-size: cover;
+        background-position: center;
+        filter: drop-shadow(0 0 6px #000);
+    }
+    #promo-header-t {
+        height: 65px;
+        width: 100%;
+        color: #3c1f10;
+        text-transform: uppercase;
+        font-family: Arial;
+        font-size: 26px;
+        padding-left: 30px;
+        text-shadow: 0 0 2px rgba(0,0,0,0.5);
+        text-align: center;
+    }
+    #promo-top {
+        width: 1010px;
+        padding-bottom: 5px;
+        margin: 0 auto;
+    }
+    #promo-top div.promo-block {
+        box-shadow: 0 0 5px rgba(0,0,0,0.25);
+    }
+    [data-id="promo-wrapper"] {
+        width: 100%;
+        height: 100%;
+        max-width: 1010px;
+        margin: 0 auto;
+        background-color: white;
+        border-radius: 5px;
+        box-shadow: 0 0 5px rgba(0,0,0,0.25);
+        box-sizing: border-box;
+    }
+    [data-id="promo-body"] {
+        flex: 1;
+    }
+
+  @media screen and (max-width:1010px) {
+    [data-id="promo-wrapper"] {
+        width: 1010px;
+        box-shadow: none;
+        border-radius: 0;
+        padding: 0 10px;
+    }
+    body {
+        background-size: 1010px;
+        background-attachment: scroll;
+    }
+  }
+  @media screen and (min-width: 1921px) {
+    body {
+        background-image: url('/images/promo/nadawilli/bg-2k.webp');
+    }
+  }
+</style>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-NME7L49XDK"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-NME7L49XDK');
+  saveLink = go;
+</script>
+</head>
+
+<body>
+
+<div id="promo-header">
+    <div id="promo-header-i"></div>
+    <div id="promo-header-l"></div>
+    <div id="promo-header-t">Вкус, в котором живет природа</div>
+</div>
+
+<div id="promo-top">
+  <div class="promo-block">
+    <div class="promo-title">Чемпионат АКАМФ 2025/26</div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2025/3560/">Кубок АКАМФ</a>
+    </div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2025/3530/">Супер-лига</a>
+    </div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2025/3531/">Первая лига</a>
+        <a href="https://www.altaifootball.ru/tournaments/2026/3582/">Вторая лига</a>
+    </div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2026/3583/">Третья лига</a>
+        <a href="https://www.altaifootball.ru/tournaments/2026/3584/">Четвертая лига</a>
+    </div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2026/3585/">Пятая лига</a>
+        <a href="https://www.altaifootball.ru/tournaments/2026/3586/">Шестая лига</a>
+    </div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2026/3587/">Седьмая лига</a>
+        <a href="https://www.altaifootball.ru/tournaments/2026/3588/">Восьмая лига</a>
+    </div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2026/3589/">Девятая лига</a>
+        <a href="https://www.altaifootball.ru/tournaments/2026/3607/">Десятая лига</a>
+        <a href="https://www.altaifootball.ru/tournaments/2026/3591/">Одиннадцатая лига</a>
+    </div>
+  </div>
+
+  <div class="promo-block">
+    <div class="promo-title">Чемпионат АКАМФ Бийска 2025/26</div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2025/3528/">Высшая лига</a>
+        <a href="https://www.altaifootball.ru/tournaments/2025/3529/">Первая лига</a>
+    </div>
+    <div class="promo-title">Чемпионат Динамо-АКАМФ 2025/26</div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2025/3546/">Лига "Динамо"</a>
+    </div>
+    <div class="promo-title">Чемпионат АКАМФ 8x8 2025 (осень)</div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2026/3581/">Первая лига</a>
+        <a href="https://www.altaifootball.ru/tournaments/2026/3594/">Вторая лига</a>
+    </div>
+  </div>
+
+
+  <div class="promo-block">
+    <div class="promo-title">Чемпионат АКАМФ среди женщин 2025/26</div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2025/3562/">Чемпионат Алтайского края</a>
+    </div>
+    <div class="promo-title">Зимняя Лига Легенд АКАМФ 2025 (осень)</div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2025/3561/">Кубок Легенд</a>
+    </div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2026/3577/">Первый дивизион</a>
+    </div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2026/3578/">Второй дивизион</a>
+    </div>
+    <div class="promo-leagues">
+        <a href="https://www.altaifootball.ru/tournaments/2026/3579/">Третий дивизион</a>
+        <a href="https://www.altaifootball.ru/tournaments/2026/3580/">Четвертый дивизион</a>
+    </div>
+  </div>
+</div>
+
+<div data-id="promo-body">
+
+<div data-id="promo-wrapper">
+
+<table class="page"><tr><td class="page_top">
+
+<table width="100%" class="site"><tr>
+  <td>
+    <div class="site">
+      <a href="/"><div class="site_title"></div></a>
+    </div>
+  </td>
+  <td><img class="m_top link" align="right" onclick="javascript:window.location='/.target/?place=top&go=https://2k-shop.ru/'" src="/images/adv/2ksport-695x70-20210119.jpg" width="695" height="70" border="0" />
+</td>
+</tr></table>
+
+  <div class="box box_blue mainmenu">
+    <div class="box_c box_ctl"><div class="box_c box_ctr"></div></div>
+    <div class="box_subject" style="margin-top:-1px;margin-bottom:-1px;">
+      <a href="/">главная</a> | <a href="/news/">новости</a> | <a href="/schedule/">календарь</a> | <a href="/tournaments/" class="menu_current">турниры</a> | <a href="/bans/">дисквалификации</a> | <a href="/teams/">команды</a> | <a href="/map/schools/">школы</a> | <a href="/stadiums/">стадионы</a> | <a href="/persons/">персоналии</a> | <a href="/documents/">документы</a> | <a href="/forum/">общение</a> | <a href="/contests/archive/">прогнозы</a> | <a href="/map/">карта</a>    </div>
+    <div class="box_c box_cbl"><div class="box_c box_cbr"></div></div>
+  </div>
+
+
+    <table width="100%">
+      <tr>
+        <td width="200">
+
+          <div class="box box_light m_top">
+            <div class="box_c box_ctl"><div class="box_c box_ctr"></div></div>
+            <div class="box_body">
+                <div class="vtabs_panel">
+                  <select onchange="this.value[0] == 't' ? showTab(this, 'tabs1', this.value) : window.location.href=this.value" style="width:100%;margin:4px 0;"><option value="tab0" selected>Текущие турниры</option><option value="tab1">Ближайшие турниры</option><option value="/tournaments/2026/">Сезон 2026</option><option value="/tournaments/2025/">Сезон 2025</option><option value="/tournaments/2024/">Сезон 2024</option><option value="/tournaments/2023/">Сезон 2023</option><option value="/tournaments/2022/">Сезон 2022</option><option value="/tournaments/2021/">Сезон 2021</option><option value="/tournaments/2020/">Сезон 2020</option><option value="/tournaments/2019/">Сезон 2019</option><option value="/tournaments/2018/">Сезон 2018</option><option value="/tournaments/2017/">Сезон 2017</option><option value="/tournaments/2016/">Сезон 2016</option><option value="/tournaments/2015/">Сезон 2015</option><option value="/tournaments/2014/">Сезон 2014</option><option value="/tournaments/2013/">Сезон 2013</option><option value="/tournaments/2012/">Сезон 2012</option><option value="/tournaments/2011/">Сезон 2011</option><option value="/tournaments/2010/">Сезон 2010</option><option value="/tournaments/2009/">Сезон 2009</option><option value="/tournaments/2008/">Сезон 2008</option><option value="/tournaments/2007/">Сезон 2007</option><option value="/tournaments/2006/">Сезон 2006</option><option value="/tournaments/2005/">Сезон 2005</option><option value="/tournaments/2004/">Сезон 2004</option><option value="/tournaments/2003/">Сезон 2003</option><option value="/tournaments/2002/">Сезон 2002</option><option value="/tournaments/2001/">Сезон 2001</option><option value="/tournaments/2000/">Сезон 2000</option><option value="/tournaments/1999/">Сезон 1999</option><option value="/tournaments/1998/">Сезон 1998</option><option value="/tournaments/1997/">Сезон 1997</option><option value="/tournaments/1996/">Сезон 1996</option><option value="/tournaments/1995/">Сезон 1995</option><option value="/tournaments/1994/">Сезон 1994</option><option value="/tournaments/1993/">Сезон 1993</option><option value="/tournaments/1992/">Сезон 1992</option><option value="/tournaments/1991/">Сезон 1991</option><option value="/tournaments/1990/">Сезон 1990</option><option value="/tournaments/1989/">Сезон 1989</option><option value="/tournaments/1988/">Сезон 1988</option><option value="/tournaments/1987/">Сезон 1987</option><option value="/tournaments/1986/">Сезон 1986</option><option value="/tournaments/1985/">Сезон 1985</option><option value="/tournaments/1984/">Сезон 1984</option><option value="/tournaments/1983/">Сезон 1983</option><option value="/tournaments/1982/">Сезон 1982</option><option value="/tournaments/1981/">Сезон 1981</option><option value="/tournaments/1980/">Сезон 1980</option><option value="/tournaments/1979/">Сезон 1979</option><option value="/tournaments/1978/">Сезон 1978</option><option value="/tournaments/1977/">Сезон 1977</option><option value="/tournaments/1976/">Сезон 1976</option><option value="/tournaments/1975/">Сезон 1975</option><option value="/tournaments/1974/">Сезон 1974</option><option value="/tournaments/1973/">Сезон 1973</option><option value="/tournaments/1972/">Сезон 1972</option><option value="/tournaments/1971/">Сезон 1971</option><option value="/tournaments/1970/">Сезон 1970</option><option value="/tournaments/1969/">Сезон 1969</option><option value="/tournaments/1968/">Сезон 1968</option><option value="/tournaments/1967/">Сезон 1967</option><option value="/tournaments/1966/">Сезон 1966</option><option value="/tournaments/1965/">Сезон 1965</option><option value="/tournaments/1964/">Сезон 1964</option><option value="/tournaments/1963/">Сезон 1963</option><option value="/tournaments/1962/">Сезон 1962</option><option value="/tournaments/1961/">Сезон 1961</option><option value="/tournaments/1960/">Сезон 1960</option><option value="/tournaments/1959/">Сезон 1959</option><option value="/tournaments/1958/">Сезон 1958</option><option value="/tournaments/1957/">Сезон 1957</option><option value="/tournaments/1956/">Сезон 1956</option><option value="/tournaments/1955/">Сезон 1955</option><option value="/tournaments/1954/">Сезон 1954</option><option value="/tournaments/1953/">Сезон 1953</option><option value="/tournaments/1952/">Сезон 1952</option><option value="/tournaments/1951/">Сезон 1951</option><option value="/tournaments/1950/">Сезон 1950</option><option value="/tournaments/1949/">Сезон 1949</option><option value="/tournaments/1948/">Сезон 1948</option><option value="/tournaments/1947/">Сезон 1947</option><option value="/tournaments/1946/">Сезон 1946</option><option value="/tournaments/1945/">Сезон 1945</option><option value="/tournaments/1944/">Сезон 1944</option><option value="/tournaments/1940/">Сезон 1940</option><option value="/tournaments/1939/">Сезон 1939</option><option value="/tournaments/1938/">Сезон 1938</option><option value="/tournaments/1937/">Сезон 1937</option><option value="/tournaments/1935/">Сезон 1935</option><option value="/tournaments/1930/">Сезон 1930</option><option value="/tournaments/1927/">Сезон 1927</option><option value="/tournaments/1926/">Сезон 1926</option><option value="/tournaments/1924/">Сезон 1924</option><option value="/tournaments/1922/">Сезон 1922</option><option value="/tournaments/1920/">Сезон 1920</option><option value="/tournaments/1915/">Сезон 1915</option>                  </select>
+                  <div class="tab"><a href="/competitions/">Архив</a></div>
+                </div>
+            </div>
+            <div class="box_c box_cbl"><div class="box_c box_cbr"></div></div>
+          </div>
+
+          <div class="m_top">
+          <img onclick="javascript:saveLink('/.target/?place=trnm_left&go=https://t.me/Sasha_Kaladze');"  class="m_top m_bottom link" src="/images/adv/drevo-200x450-20260410.jpeg" width="200" border="0" />
+<br/>
+<img onclick="javascript:saveLink('/.target/?place=trnm_left&go=https://t.me/Andranik_002');"  class="m_top m_bottom link" src="/images/adv/nika-200x450-20260410.jpeg" width="200" border="0" />
+<br/>
+
+<img onclick="javascript:saveLink('/.target/?place=schedule&go=https://megamebel.su/');" class="m_top m_bottom link" src="/images/adv/megamebel-200x89-20260212.jpg" width="200" border="0" />
+<p />
+<img onclick="javascript:saveLink('/.target/?place=trnm_left&go=https://zaimka-ls.ru/');"  class="m_top2 m_bottom2 link" src="/images/adv/lessk-277x130-20251019.png" width="200" border="0" />
+<br/>
+<img onclick="javascript:saveLink('/.target/?place=trnm_left&go=https://m.plavich.ru/');"  class="m_top m_bottom link" src="/images/adv/plavych-200x140-20231011.png" width="200" border="0" />
+<br/>
+
+          </div>
+
+        </td>
+
+        <td width="20"></td>
+
+        <td>
+          <div class="content">
+
+            
+<div style="margin-top:10px;min-height:90px;font-family:'Trebuchet MS';text-align:center">
+<span style="display:inline-block">
+<!-- Yandex.RTB R-A-124641-2 -->
+<div id="yandex_rtb_R-A-124641-2"></div>
+<script type="text/javascript">
+    (function(w, d, n, s, t) {
+        w[n] = w[n] || [];
+        w[n].push(function() {
+            Ya.Context.AdvManager.render({
+                blockId: "R-A-124641-2",
+                renderTo: "yandex_rtb_R-A-124641-2",
+                async: true
+            });
+        });
+        t = d.getElementsByTagName("script")[0];
+        s = d.createElement("script");
+        s.type = "text/javascript";
+        s.src = "//an.yandex.ru/system/context.js";
+        s.async = true;
+        t.parentNode.insertBefore(s, t);
+    })(this, this.document, "yandexContextAsyncCallbacks");
+</script>
+</span>
+</div>
+
+
+            <div class="tabs_items" id="tabs1">
+              <div class="tab_item" id="tab0">                  <div class="box box_blue_light m_top">
+                    <div class="box_c box_ctl"><div class="box_c box_ctr"></div></div>
+                    <div class="box_body xmedium black">Текущие турниры</div>
+                    <div class="box_c box_cbl"><div class="box_c box_cbr"></div></div>
+                  </div>
+                  <div class="content">
+                  <div class="">
+  <dl>
+<dt><div class="m_top section_title medium gray">Чемпионаты и кубки по футболу</div><dd><div class="m_top m_bottom"><div class="bold small bullet gray">Чемпионат России по футболу</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2026/3608/">Первенство России по футболу. Вторая лига. Дивизион Б</a></div><div class="xsmall gray">5 апреля &ndash; 15 ноября 2026 г.</div></div><dd><div class="m_top m_bottom"><div class="bold small bullet"><a href="/tournaments/2026/3615/">Традиционный турнир по футболу памяти заслуженного тренера РСФСР В. С. Фомичева</a></div><div class="xsmall gray">7 &ndash; 16 апреля 2026 г., Алтайский край</div></div><dt><div class="m_top section_title medium gray">Детско-юношеский футбол</div><dd><div class="m_top m_bottom"><div class="bold small bullet"><a href="/tournaments/2025/3547/">Детская Футбольная Лига Алтайского края U-15</a></div><div class="xsmall gray">8 ноября 2025 г. &ndash; 12 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom"><div class="bold small bullet gray">Детская Футбольная Лига Алтайского края</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2025/3548/">Детская Футбольная Лига Алтайского края U-13. Первая лига</a></div><div class="xsmall gray">8 ноября 2025 г. &ndash; 12 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2025/3549/">Детская Футбольная Лига Алтайского края U-13. Вторая лига</a></div><div class="xsmall gray">8 ноября 2025 г. &ndash; 12 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom"><div class="bold small bullet"><a href="/tournaments/2025/3550/">Детская Футбольная Лига Алтайского края U-12</a></div><div class="xsmall gray">8 ноября 2025 г. &ndash; 12 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom"><div class="bold small bullet gray">Детская Футбольная Лига Алтайского края</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2025/3551/">Детская Футбольная Лига Алтайского края U-11. Первая лига</a></div><div class="xsmall gray">8 ноября 2025 г. &ndash; 12 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2025/3552/">Детская Футбольная Лига Алтайского края U-11. Вторая лига</a></div><div class="xsmall gray">8 ноября 2025 г. &ndash; 12 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2025/3553/">Детская Футбольная Лига Алтайского края U-11. Третья лига</a></div><div class="xsmall gray">8 ноября 2025 г. &ndash; 12 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom"><div class="bold small bullet gray">Детская Футбольная Лига Алтайского края</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2025/3554/">Детская Футбольная Лига Алтайского края U-10. Первая лига</a></div><div class="xsmall gray">8 ноября 2025 г. &ndash; 12 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2025/3555/">Детская Футбольная Лига Алтайского края U-10. Вторая лига</a></div><div class="xsmall gray">8 ноября 2025 г. &ndash; 12 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom"><div class="bold small bullet gray">Детская Футбольная Лига Алтайского края</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2025/3556/">Детская Футбольная Лига Алтайского края U-9. Первая лига</a></div><div class="xsmall gray">8 ноября 2025 г. &ndash; 12 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2025/3557/">Детская Футбольная Лига Алтайского края U-9. Вторая лига</a></div><div class="xsmall gray">8 ноября 2025 г. &ndash; 12 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom"><div class="bold small bullet gray">Детская Футбольная Лига Алтайского края</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2025/3558/">Детская Футбольная Лига Алтайского края U-8. Первая лига</a></div><div class="xsmall gray">8 ноября 2025 г. &ndash; 12 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom"><div class="bold small bullet"><a href="/tournaments/2025/3559/">Детская Футбольная Лига Алтайского края U-7</a></div><div class="xsmall gray">8 ноября 2025 г. &ndash; 12 апреля 2026 г., Алтайский край</div></div><dt><div class="m_top section_title medium gray">Ветеранский мини-футбол</div><dd><div class="m_top m_bottom"><div class="bold small bullet"><a href="/tournaments/2025/3561/">Кубок Лиги легенд Алтая АКАМФ по мини-футболу</a></div><div class="xsmall gray">18 октября 2025 г. &ndash; 19 апреля 2026 г., Алтайский край</div></div><dt><div class="m_top section_title medium gray">Мини-футбол</div><dd><div class="m_top m_bottom"><div class="bold small bullet gray">Чемпионат Алтайского края по мини-футболу</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2026/3583/">АКАМФ Чемпионат Алтайского края по мини-футболу. Третья лига</a></div><div class="xsmall gray">10 января &ndash; 11 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2026/3607/">АКАМФ Чемпионат Алтайского края по мини-футболу. Десятая лига</a></div><div class="xsmall gray">1 марта &ndash; 19 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2026/3591/">АКАМФ Чемпионат Алтайского края по мини-футболу. Одиннадцатая лига</a></div><div class="xsmall gray">10 января &ndash; 19 апреля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom"><div class="bold small bullet"><a href="/tournaments/2025/3560/">Кубок АКАМФ по мини-футболу</a></div><div class="xsmall gray">18 октября 2025 г. &ndash; 20 апреля 2026 г., Алтайский край, Барнаул</div></div><dd><div class="m_top m_bottom"><div class="bold small bullet"><a href="/tournaments/2026/3614/">Кубок ШОКОЛАТТЕ</a></div><div class="xsmall gray">10 &ndash; 19 апреля 2026 г., Алтайский край, Бийск</div></div>  </dl>
+</div></div>                  </div>
+                  <div class="tab_item hidden" id="tab1">                  <div class="box box_blue_light m_top">
+                    <div class="box_c box_ctl"><div class="box_c box_ctr"></div></div>
+                    <div class="box_body xmedium black">Ближайшие турниры</div>
+                    <div class="box_c box_cbl"><div class="box_c box_cbr"></div></div>
+                  </div>
+                  <div class="content">
+                  <div class="">
+  <dl>
+<dt><div class="m_top section_title medium gray">Чемпионаты и кубки по футболу</div><dd><div class="m_top m_bottom"><div class="bold small bullet gray">Чемпионат России по футболу</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2026/3611/">Межрегиональные спортивные соревнования по футболу среди мужских команд спортивного сезона 2026 г. Территориальная зона «Сибирь». Группа «Золото» (Третья лига Сибирь «Золото»). Третий дивизион. Зона Сибири</a></div><div class="xsmall gray">19 апреля &ndash; 30 октября 2026 г.</div></div><dd><div class="m_top m_bottom"><div class="bold small bullet"><a href="/tournaments/2026/3613/">Футбольный турнир XLVI летней Олимпиады сельских спортсменов Алтая</a></div><div class="xsmall gray">30 мая &ndash; 12 июля 2026 г., Алтайский край</div></div><dt><div class="m_top section_title medium gray">Ветеранский мини-футбол</div><dd><div class="m_top m_bottom"><div class="bold small bullet gray">Чемпионат Алтайского края по летнему мини-футболу среди ветеранов</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2026/3618/">Лига футбольных легенд Алтая по летнему мини-футболу среди ветеранов. Первый дивизион</a></div><div class="xsmall gray">12 мая &ndash; 30 июля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2026/3619/">Лига футбольных легенд Алтая по летнему мини-футболу среди ветеранов. Второй дивизион</a></div><div class="xsmall gray">12 мая &ndash; 30 июля 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2026/3620/">Лига футбольных легенд Алтая по летнему мини-футболу среди ветеранов. Третий дивизион</a></div><div class="xsmall gray">12 мая &ndash; 15 июля 2026 г., Алтайский край</div></div><dt><div class="m_top section_title medium gray">Мини-футбол</div><dd><div class="m_top m_bottom"><div class="bold small bullet gray">Всероссийские соревнования по мини-футболу "Мини-футбол в ВУЗы" среди мужских команд высших учебных заведений</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2026/3612/">Региональный этап Всероссийских соревнований по футзалу среди команд образовательных организаций высшего образования и профессиональных образовательных организаций «Футзал – в вузы и ссузы», посвященных памяти Никиты Павловича Симоняна. Алтайская региональная лига. Второй дивизион</a></div><div class="xsmall gray">11 &ndash; 19 апреля 2026 г.</div></div><dd><div class="m_top m_bottom"><div class="bold small bullet"><a href="/tournaments/2026/3601/">Суперкубок Алтайского края по мини-футболу</a></div><div class="xsmall gray">26 апреля 2026 г., Алтайский край</div></div><dt><div class="m_top section_title medium gray">Футбол 8x8</div><dd><div class="m_top m_bottom"><div class="bold small bullet gray">Чемпионат Алтайской футбольной лиги 8х8</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2026/3616/">Чемпионат города Барнаула по футболу 8х8. Первая лига</a></div><div class="xsmall gray">14 апреля &ndash; 18 июня 2026 г., Алтайский край</div></div><dd><div class="m_top m_bottom" style="padding-left:30px;"><div class="small bullet"><a href="/tournaments/2026/3617/">Чемпионат города Барнаула по футболу 8х8. Вторая лига</a></div><div class="xsmall gray">14 апреля &ndash; 18 июня 2026 г., Алтайский край</div></div>  </dl>
+</div></div>                  </div>
+                              </div>
+          </div>
+        </td>
+
+      </tr>
+    </table>
+
+
+
+</td></tr>
+<tr>
+  <td class="page_footer">
+
+        <div class="box box_gray_xl m_bottom m_top">
+      <div class="box_c box_ctl"><div class="box_c box_ctr"></div></div>
+      <div class="box_body" style="padding:8px 16px;">
+
+        <table width="100%"><tr>
+
+          <td>
+            <b class="">"Алтайский футбол" &copy; 2009-2026</b>
+            <div id="vk_like" style="display:inline-block;margin-left:8px;margin-top:-2px;vertical-align:middle"></div>
+            <script type="text/javascript">
+            VK.Widgets.Like("vk_like", {type: "button", pageUrl: "http://www.altaifootball.ru/"});
+            </script>
+            <div class="m_top2">
+                          </div>
+            <div class="m_top2">
+              Контактный адрес <u>info@altaifootball.ru</u>
+            </div>
+          </td>
+          <td>
+            <a href="/terms/">Порядок использования информации сайта</a>
+          </td>
+          <td width="320" align="left">
+             <div class="xmedium">
+               <a href="/">главная</a> &bull;
+               <a href="/news/">новости</a> &bull;
+               <a href="/forum/">общение</a> &bull;
+               <a href="/blogs/">блоги</a> &bull;
+               <a href="/contests/">прогнозы</a>
+             </div>
+             <div class="medium nowrap">
+               <a href="/schedule/">календарь</a>  &bull;
+               <a href="/tournaments/">турниры</a> &bull;
+               <a href="/teams/">команды</a> &bull;
+               <a href="/stadiums/">стадионы</a> &bull;
+               <a href="/persons/">персоналии</a>
+             </div>
+             <div class="ysmall m_top">
+               <a class="light" href="/competitions/">архив чемпионатов и турниров</a>
+             </div>
+          </td>
+
+        </tr></table>
+
+      </div>
+      <div class="box_c box_cbl"><div class="box_c box_cbr"></div></div>
+    </div>
+<script type="text/javascript">
+
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-12200872-1']);
+  _gaq.push(['_trackPageview']);
+
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+
+</script>
+
+
+  </td>
+</tr>
+</table>
+<!--www.altaifootball.ru: Page generated in 0,02604 seconds-->
+</div></div>
+
+</body>
+
+</html>

@@ -405,3 +405,221 @@ class FootballFormatter:
             lines.append(f"{i}. ⚽ {team}{league_str}")
 
         return "\n".join(lines)
+
+    # ========================================================================
+    # ЗАЯВКА КОМАНДЫ
+    # ========================================================================
+
+    @staticmethod
+    def format_team_roster(
+        players: list,
+        team_name: str,
+    ) -> str:
+        """Форматировать заявку команды.
+
+        Пример:
+          👥 Заявка
+          GM SPORT 22 Барнаул
+
+          1. Иван Иванов
+             №10 | Нападающий | Д.Р.: 01.01.2000
+             Матчи: 5 | Голы: 3
+        """
+        from app.utils.text import pluralize_matches, pluralize_games
+
+        if not players:
+            return (
+                f"👥 <b>Заявка</b>\n{escape_html(team_name)}\n\n"
+                "😔 Не удалось загрузить заявку команды.\n"
+                "Возможно, данные ещё не опубликованы на сайте."
+            )
+
+        lines = [f"👥 <b>Заявка</b>", escape_html(team_name), ""]
+
+        for i, player in enumerate(players, 1):
+            name = truncate(escape_html(player.name), 45)
+            entry = f"{i}. <b>{name}</b>"
+
+            details: list[str] = []
+            if player.number is not None:
+                details.append(f"№{player.number}")
+            if player.position:
+                details.append(escape_html(player.position))
+            if player.birth_date:
+                details.append(f"Д.Р.: {player.birth_date.strftime('%d.%m.%Y')}")
+
+            if details:
+                entry += f"\n   {' | '.join(details)}"
+
+            # Матчи и голы
+            stats_parts: list[str] = []
+            if player.matches:
+                stats_parts.append(f"Матчи: {player.matches}")
+            if player.goals:
+                stats_parts.append(f"Голы: {player.goals}")
+            if stats_parts:
+                entry += f"\n   {' | '.join(stats_parts)}"
+
+            lines.append(entry)
+
+        lines.append(
+            f"\n📊 Всего: {len(players)} {pluralize_matches(len(players))}"
+        )
+        return "\n".join(lines)
+
+    # ========================================================================
+    # СТАТИСТИКА ИГРОКОВ
+    # ========================================================================
+
+    @staticmethod
+    def format_team_player_stats(
+        stats: list,
+        team_name: str,
+    ) -> str:
+        """Форматировать статистику игроков.
+
+        Пример:
+          📈 Статистика игроков
+          GM SPORT 22 Барнаул
+
+          1. Иван Иванов — 5 матчей, 3 гола, 1 передача
+          2. Пётр Петров — 5 матчей, 1 гол, 2 ЖК
+        """
+        from app.utils.text import pluralize_matches, pluralize_games
+
+        if not stats:
+            return (
+                f"📈 <b>Статистика игроков</b>\n{escape_html(team_name)}\n\n"
+                "😔 Не удалось загрузить статистику игроков.\n"
+                "Возможно, данные ещё не опубликованы на сайте."
+            )
+
+        lines = [f"📈 <b>Статистика игроков</b>", escape_html(team_name), ""]
+
+        # Сортируем по голам (убывание)
+        sorted_stats = sorted(stats, key=lambda s: s.goals, reverse=True)
+
+        for i, stat in enumerate(sorted_stats, 1):
+            name = truncate(escape_html(stat.name), 40)
+            entry = f"{i}. <b>{name}</b>"
+
+            details: list[str] = []
+            if stat.matches:
+                details.append(f"{stat.matches} {pluralize_matches(stat.matches)}")
+            if stat.goals:
+                details.append(f"⚽ {stat.goals}")
+            if stat.assists:
+                details.append(f"🅰 {stat.assists}")
+            if stat.yellow_cards:
+                details.append(f"🟨 {stat.yellow_cards}")
+            if stat.red_cards:
+                details.append(f"🟥 {stat.red_cards}")
+            if stat.minutes:
+                details.append(f"⏱ {stat.minutes} мин")
+
+            if details:
+                entry += f" — {', '.join(details)}"
+
+            lines.append(entry)
+
+        lines.append(
+            f"\n📊 Всего: {len(stats)} {pluralize_matches(len(stats))}"
+        )
+        return "\n".join(lines)
+
+    # ========================================================================
+    # ПРОГНОЗ НА МАТЧ
+    # ========================================================================
+
+    @staticmethod
+    def format_match_prediction(prediction) -> str:
+        """Форматировать прогноз на матч.
+
+        Включает: форму команд, личные встречи, таблицу, прогноз.
+        """
+        home = escape_html(prediction.home_team)
+        away = escape_html(prediction.away_team)
+
+        lines = [
+            f"🤖 <b>Прогноз на матч</b>",
+            f"{home} — {away}",
+        ]
+
+        if prediction.match_date:
+            dt = prediction.match_date
+            date_str = dt.strftime("%d.%m.%Y")
+            time_str = dt.strftime(" %H:%M") if dt.hour or dt.minute else ""
+            lines.append(f"{date_str}{time_str}")
+
+        lines.append("")
+
+        # Форма домашней команды
+        home_word = FootballFormatter._pluralize_form(prediction.home_wins, "побед", "победа", "победы")
+        draw_word = FootballFormatter._pluralize_form(prediction.home_draws, "ничь", "ничья", "ничьи")
+        loss_word = FootballFormatter._pluralize_form(prediction.home_losses, "поражен", "поражение", "поражения")
+
+        lines.append(f"📊 <b>Форма {home}</b>:")
+        lines.append(f"  • {prediction.home_wins} {home_word}, {prediction.home_draws} {draw_word}, {prediction.home_losses} {loss_word}")
+        lines.append(f"  • Средняя результативность: {prediction.home_goals_scored} забито, {prediction.home_goals_conceded} пропущено")
+        if prediction.home_position:
+            lines.append(f"  • Позиция в таблице: {prediction.home_position}")
+        lines.append("")
+
+        # Форма соперника
+        away_word = FootballFormatter._pluralize_form(prediction.away_wins, "побед", "победа", "победы")
+        away_draw_word = FootballFormatter._pluralize_form(prediction.away_draws, "ничь", "ничья", "ничьи")
+        away_loss_word = FootballFormatter._pluralize_form(prediction.away_losses, "поражен", "поражение", "поражения")
+
+        lines.append(f"📊 <b>Форма {away}</b>:")
+        lines.append(f"  • {prediction.away_wins} {away_word}, {prediction.away_draws} {away_draw_word}, {prediction.away_losses} {away_loss_word}")
+        lines.append(f"  • Средняя результативность: {prediction.away_goals_scored} забито, {prediction.away_goals_conceded} пропущено")
+        if prediction.away_position:
+            lines.append(f"  • Позиция в таблице: {prediction.away_position}")
+        lines.append("")
+
+        # Личные встречи
+        if prediction.h2h_total > 0:
+            h2h_word = FootballFormatter._pluralize_form(prediction.h2h_total, "встреч", "встреча", "встречи")
+            lines.append(f"🤝 <b>Личные встречи</b> ({prediction.h2h_total} {h2h_word}):")
+            lines.append(f"  • Победы {home}: {prediction.h2h_home_wins}")
+            lines.append(f"  • Ничьи: {prediction.h2h_draws}")
+            lines.append(f"  • Победы {away}: {prediction.h2h_away_wins}")
+            lines.append(f"  • Голы {home}: {prediction.h2h_home_goals}")
+            lines.append(f"  • Голы {away}: {prediction.h2h_away_goals}")
+            lines.append("")
+
+        # Вывод
+        lines.append(f"📝 <b>Вывод:</b>")
+        lines.append(f"  {escape_html(prediction.prediction_text)}")
+        lines.append("")
+
+        # Прогноз
+        lines.append(f"🔮 <b>Прогнозируемый счёт:</b>")
+        lines.append(f"  <b>{prediction.predicted_home_score}:{prediction.predicted_away_score}</b>")
+        lines.append("")
+        lines.append("⚠️ <i>Это статистический прогноз на основе формы команд, не гарантия результата.</i>")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _pluralize_form(n: int, many: str, one: str, few: str) -> str:
+        """Склонение для слов в прогнозе.
+
+        Args:
+            n: Число.
+            many: Форма для 5-10, 11-14 (побед, поражений).
+            one: Форма для 1 (победа, поражение).
+            few: Форма для 2-4 (победы, поражения).
+
+        Returns:
+            Правильная форма слова.
+        """
+        abs_n = abs(n) % 100
+        last = abs_n % 10
+        if 11 <= abs_n <= 14:
+            return many
+        if last == 1:
+            return one
+        if 2 <= last <= 4:
+            return few
+        return many
