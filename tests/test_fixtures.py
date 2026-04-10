@@ -162,3 +162,83 @@ class TestPlayerStatsParsing:
         total_yellow = sum(s.yellow_cards for s in stats)
         total_red = sum(s.red_cards for s in stats)
         assert total_yellow + total_red > 0
+
+
+class TestBoxscoreParsing:
+    """Тесты парсинга boxscore — источник истины для сыгранного матча."""
+
+    def test_boxscore_teams_and_score(self) -> None:
+        """Boxscore: GM SPORT 22 vs АТТ фермер (2:1)."""
+        parser = SiteParser()
+        html = load_fixture("boxscore_140352.html")
+        soup = BeautifulSoup(html, "lxml")
+        match = parser._parse_boxscore(soup, "/tournaments/boxscore/140352/")
+
+        assert match is not None
+        assert "GM SPORT 22" in match.home_team
+        assert "АТТ фермер" in match.away_team
+        assert match.home_score == 2
+        assert match.away_score == 1
+        assert match.is_finished
+        assert match.status == "finished"
+
+    def test_boxscore_second_match(self) -> None:
+        """Boxscore: Товарка 22 vs GM SPORT 22 (7:3)."""
+        parser = SiteParser()
+        html = load_fixture("boxscore_140597.html")
+        soup = BeautifulSoup(html, "lxml")
+        match = parser._parse_boxscore(soup, "/tournaments/boxscore/140597/")
+
+        assert match is not None
+        # Товарка 22 — home, GM SPORT 22 — away (по boxscore)
+        assert "Товарка 22" in match.home_team
+        assert "GM SPORT 22" in match.away_team
+        assert match.home_score == 7
+        assert match.away_score == 3
+
+
+class TestPreviewParsing:
+    """Тесты парсинга preview — источник истины для будущего матча."""
+
+    def test_preview_teams(self) -> None:
+        """Preview: СКА vs GM SPORT 22."""
+        parser = SiteParser()
+        html = load_fixture("preview_140750.html")
+        soup = BeautifulSoup(html, "lxml")
+        match = parser._parse_preview(soup, "/tournaments/boxscore/140750/preview/")
+
+        assert match is not None
+        assert "СКА" in match.home_team
+        assert "GM SPORT 22" in match.away_team
+        assert match.status == "scheduled"
+        assert match.match_date is not None
+
+
+class TestMatchCandidates:
+    """Тесты кандидатов матчей со страницы команды."""
+
+    def test_gm_sport_candidates(self) -> None:
+        """GM SPORT 22: минимум 4 сыгранных + 2 будущих."""
+        parser = SiteParser()
+        html = load_fixture("team_6662.html")
+        soup = BeautifulSoup(html, "lxml")
+
+        candidates = []
+        for table in soup.find_all("table", class_="table_box_row"):
+            rows = table.find_all("tr")
+            if len(rows) < 2:
+                continue
+            header = " ".join(clean_text(c.get_text()).lower() for c in rows[0].find_all(["th", "td"]))
+            if "дата" not in header:
+                continue
+            team_name = parser._extract_current_team_name(soup)
+            for row in rows[1:]:
+                c = parser._parse_candidate_row(row, team_name)
+                if c:
+                    candidates.append(c)
+            break
+
+        assert len(candidates) >= 5
+        # Есть boxscore ссылки
+        boxscore = [c for c in candidates if "/boxscore/" in c.match_url and "/preview/" not in c.match_url]
+        assert len(boxscore) >= 4

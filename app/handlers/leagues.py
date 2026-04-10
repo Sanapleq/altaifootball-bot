@@ -47,7 +47,8 @@ async def _safe_edit_text(callback: CallbackQuery, text: str, **kwargs) -> None:
     """
     try:
         await callback.message.edit_text(text, **kwargs)
-    except Exception:
+    except Exception as e:
+        logger.debug("[_safe_edit_text] fallback to answer: %s", e)
         # Не удалось отредактировать — шлём новое
         await callback.message.answer(text, **kwargs)
 
@@ -75,8 +76,11 @@ async def _find_team_by_id(team_id: str) -> Team | None:
                     )
                     return t
             found_count += len(teams)
-        except Exception:
-            pass  # Тихо пропускаем ошибочные лиги
+        except Exception as e:
+            logger.debug(
+                "[_find_team_by_id] Ошибка загрузки команд лиги '%s': %s",
+                league.name, e,
+            )
     logger.debug(
         "[_find_team_by_id] Итог: team_id=%s не найдена "
         "(проверено %d лиг, %d команд)",
@@ -104,8 +108,11 @@ async def _find_league_for_team(team_id: str) -> League | None:
                     )
                     return league
             found_count += len(teams)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                "[_find_league_for_team] Ошибка загрузки команд лиги '%s': %s",
+                league.name, e,
+            )
     logger.debug(
         "[_find_league_for_team] Итог: лига для team_id=%s не найдена "
         "(проверено %d лиг, %d команд)",
@@ -148,8 +155,11 @@ async def _get_team_from_state_or_search(
                 for t in teams:
                     if t.id == team_id:
                         return t
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    "[_get_team_from_state_or_search] Ошибка загрузки команд лиги '%s': %s",
+                    league.name, e,
+                )
 
     # 4. Fallback: сканируем все лиги (тяжёлый)
     return await _find_team_by_id(team_id)
@@ -424,8 +434,15 @@ async def cb_league_teams(callback: CallbackQuery, state: FSMContext) -> None:
 async def cb_teams_page(callback: CallbackQuery, state: FSMContext) -> None:
     """Пагинация списка команд."""
     parts = parse_callback_multi(callback.data)
+    if len(parts) < 3:
+        await callback.answer("Некорректные данные пагинации", show_alert=True)
+        return
     league_id = parts[1]
-    page = int(parts[2])
+    try:
+        page = int(parts[2])
+    except ValueError:
+        await callback.answer("Некорректный номер страницы", show_alert=True)
+        return
 
     state_data = await state.get_data()
     teams: list[Team] = state_data.get("teams_list", [])

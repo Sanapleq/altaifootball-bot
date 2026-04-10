@@ -153,20 +153,85 @@ class FootballService:
     # ========================================================================
 
     async def get_team_matches(self, team: Team) -> list[Match]:
-        """Получить все матчи команды."""
-        cache_key = f"team_matches:{team.id}"
+        """Получить все матчи команды.
+
+        Стратегия:
+        1. Получить кандидатов со страницы команды (ссылки + даты).
+        2. Для сыгранных матчей — парсить boxscore (источник истины).
+        3. Для будущих матчей — парсить preview.
+        4. Если boxscore/preview недоступен — использовать кандидата как fallback.
+
+        Args:
+            team: Объект команды.
+
+        Returns:
+            Список подтверждённых Match.
+        """
+        cache_key = f"team_matches_confirmed:{team.id}"
         cached = await cache.get(cache_key)
         if cached is not None:
-            logger.debug(f"Матчи команды {team.name} загружены из кеша")
+            logger.debug("[service] Матчи команды '%s' из кеша", team.name)
             return cached
 
-        try:
-            matches = await self._parser.get_team_matches(team.url)
-            await cache.set_matches(cache_key, matches)
-            return matches
-        except Exception as e:
-            logger.error(f"Ошибка получения матчей команды {team.name}: {e}")
+        # 1. Кандидаты со страницы команды
+        candidates = await self._parser.get_team_match_candidates(team.url)
+        if not candidates:
             return []
+
+        confirmed: list[Match] = []
+        fallback: list[Match] = []
+
+        for c in candidates:
+            if c.match_url and "/preview/" in c.match_url:
+                # Будущий матч → preview
+                preview = await self._parser.get_match_preview(c.match_url)
+                if preview:
+                    confirmed.append(preview)
+                else:
+                    fallback.append(c.as_match())
+            elif c.match_url and "/boxscore/" in c.match_url:
+                # Сыгранный матч → boxscore
+                boxscore = await self._parser.get_match_boxscore(c.match_url)
+                if boxscore:
+                    confirmed.append(boxscore)
+                else:
+                    fallback.append(c.as_match())
+            else:
+                # Нет ссылки — fallback
+                fallback.append(c.as_match())
+
+        # Приоритет источников:
+        # 1) подтверждённые матчи (boxscore/preview)
+        # 2) fallback только для неподтверждённых строк
+        # Это предотвращает потерю валидных boxscore/preview из-за
+        # "переключения" всего списка на fallback.
+        seen_keys: set[tuple[str, str, object]] = set()
+        result: list[Match] = []
+
+        def _match_key(m: Match) -> tuple[str, str, object]:
+            date_key = m.match_date.date().isoformat() if m.match_date else None
+            return (m.home_team.strip().lower(), m.away_team.strip().lower(), date_key)
+
+        for m in confirmed:
+            key = _match_key(m)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            result.append(m)
+
+        for m in fallback:
+            key = _match_key(m)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            result.append(m)
+
+        await cache.set_matches(cache_key, result)
+        logger.info(
+            "[service] Матчи '%s': подтверждено=%d, fallback=%d, использовано=%d",
+            team.name, len(confirmed), len(fallback), len(result)
+        )
+        return result
 
     async def get_team_upcoming_matches(self, team: Team) -> list[Match]:
         """Получить предстоящие матчи команды.
@@ -338,7 +403,8 @@ class FootballService:
             logger.debug("[prediction] У команды '%s' нет предстоящих матчей", team.name)
             return None
 
-        next_match = upcoming[0]
+        preview_upcoming = [m for m in upcoming if m.id.startswith("preview_")]
+        next_match = preview_upcoming[0] if preview_upcoming else upcoming[0]
         opponent_name = (
             next_match.away_team
             if next_match.home_team.lower() == team.name.lower()
@@ -356,8 +422,10 @@ class FootballService:
             opponent = await self._find_team_by_name(opponent_name)
 
         # 3. Последние результаты
-        team_results = await self.get_team_recent_results(team)
-        opponent_results = await self.get_team_recent_results(opponent) if opponent else []
+        team_results_raw = await self.get_team_recent_results(team)
+        opponent_results_raw = await self.get_team_recent_results(opponent) if opponent else []
+        team_results = self._select_reliable_results_for_prediction(team_results_raw)
+        opponent_results = self._select_reliable_results_for_prediction(opponent_results_raw)
 
         # 4. Метрики формы (последние 5)
         team_metrics = self._calc_form_metrics(team_results[:5], team.name)
@@ -368,8 +436,14 @@ class FootballService:
             "matches": 0,
         }
 
-        # 5. Личные встречи (из результатов обеих команд)
-        h2h = await self._get_head_to_head(team_results, opponent_results, team.name, opponent_name)
+        # 5. Личные встречи:
+        # Сначала считаем по подтверждённым boxscore-матчам,
+        # fallback на общий набор только если подтверждённых H2H нет.
+        team_results_box = [m for m in team_results if m.id.startswith("boxscore_")]
+        opponent_results_box = [m for m in opponent_results if m.id.startswith("boxscore_")]
+        h2h = await self._get_head_to_head(team_results_box, opponent_results_box, team.name, opponent_name)
+        if h2h["total"] == 0:
+            h2h = await self._get_head_to_head(team_results, opponent_results, team.name, opponent_name)
 
         # 6. Позиции в таблице
         team_standing = await self.get_team_position_in_table(team)
@@ -517,6 +591,17 @@ class FootballService:
             prediction_text=prediction_text,
         )
 
+    def _select_reliable_results_for_prediction(self, results: list[Match]) -> list[Match]:
+        """Отобрать матчи для прогноза.
+
+        Приоритет: подтверждённые boxscore-матчи.
+        Если их мало, используем все завершённые результаты как fallback.
+        """
+        reliable = [m for m in results if m.id.startswith("boxscore_")]
+        if len(reliable) >= 3:
+            return reliable
+        return results
+
     async def _find_team_in_league(self, name: str, league_id: str) -> Optional[Team]:
         """Найти команду внутри конкретной лиги (быстрый путь)."""
         if not name or name == "—":
@@ -579,24 +664,31 @@ class FootballService:
         total = 0
         seen_matches: set[str] = set()
 
-        team_lower = team_name.lower()
-        opp_lower = opponent_name.lower()
+        def _norm_name(name: str) -> str:
+            return " ".join(name.strip().lower().split())
 
         for match in team_results + opponent_results:
             if match.home_score is None or match.away_score is None:
                 continue
 
             # Проверяем что обе команды участвуют
-            home_is_team = match.home_team.lower() == team_lower
-            home_is_opp = match.home_team.lower() == opp_lower
-            away_is_team = match.away_team.lower() == team_lower
-            away_is_opp = match.away_team.lower() == opp_lower
+            home_name = _norm_name(match.home_team)
+            away_name = _norm_name(match.away_team)
+            home_is_team = home_name == _norm_name(team_name)
+            home_is_opp = home_name == _norm_name(opponent_name)
+            away_is_team = away_name == _norm_name(team_name)
+            away_is_opp = away_name == _norm_name(opponent_name)
 
             if not ((home_is_team or home_is_opp) and (away_is_team or away_is_opp)):
                 continue
 
-            # Уникальный ключ матча (чтобы не дублировать)
-            match_key = f"{match.home_team}_{match.away_team}_{match.match_date}"
+            # Уникальный ключ матча (чтобы не дублировать одну и ту же игру
+            # из разных списков и с возможным переворотом home/away):
+            # 1) стабильный id, если есть
+            # 2) иначе неориентированная пара команд + дата
+            date_key = match.match_date.isoformat() if match.match_date else "nodate"
+            pair_key = "|".join(sorted([home_name, away_name]))
+            match_key = match.id if getattr(match, "id", "") else f"{pair_key}_{date_key}"
             if match_key in seen_matches:
                 continue
             seen_matches.add(match_key)
@@ -649,9 +741,18 @@ class FootballService:
         total_scored = 0
         total_conceded = 0
 
+        team_norm = " ".join(team_name.strip().lower().split())
+
         for m in results:
             if m.home_score is not None and m.away_score is not None:
-                is_home = m.home_team.lower() == team_name.lower()
+                home_norm = " ".join(m.home_team.strip().lower().split())
+                away_norm = " ".join(m.away_team.strip().lower().split())
+
+                if home_norm != team_norm and away_norm != team_norm:
+                    # Пропускаем матч, если команда в нём явно не участвует.
+                    continue
+
+                is_home = home_norm == team_norm
 
                 if is_home:
                     scored = m.home_score
@@ -670,7 +771,7 @@ class FootballService:
                 else:
                     losses += 1
 
-        matches = len(results)
+        matches = wins + draws + losses
         return {
             "wins": wins,
             "draws": draws,

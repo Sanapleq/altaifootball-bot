@@ -101,7 +101,8 @@ class TestMatchPrediction:
             h2h_home_wins=3,
             h2h_draws=1,
             h2h_away_wins=1,
-            h2h_goals=12,
+            h2h_home_goals=12,
+            h2h_away_goals=7,
             home_position=2,
             away_position=5,
         )
@@ -557,6 +558,19 @@ class TestFormMetricsCorrectness:
         assert metrics["draws"] == 1
         assert metrics["losses"] == 0
 
+    def test_unrelated_match_is_skipped(self) -> None:
+        """Матч без команды не должен попадать в форму."""
+        svc = FootballService()
+        results = [
+            self._make_match("А", "Б", 2, 1),  # не матч СКА
+            self._make_match("СКА", "В", 1, 0),  # матч СКА
+        ]
+        metrics = svc._calc_form_metrics(results, "СКА")
+        assert metrics["matches"] == 1
+        assert metrics["wins"] == 1
+        assert metrics["avg_scored"] == 1.0
+        assert metrics["avg_conceded"] == 0.0
+
 
 class TestPredictionNoFlip:
     """Тесты: прогноз не переворачивает победы/поражения."""
@@ -607,3 +621,173 @@ class TestPredictionNoFlip:
         assert pred.away_losses == 3
         # home_team ≠ away_team → home_* это метрики соперника
         assert pred.home_wins == 3
+
+
+class TestHeadToHeadDedup:
+    """Тесты дедупликации H2H по match.id."""
+
+    def _make_match(self, match_id: str, home: str, away: str, hs: int, aws: int) -> Match:
+        return Match(
+            id=match_id,
+            home_team=home,
+            away_team=away,
+            home_score=hs,
+            away_score=aws,
+            status="finished",
+        )
+
+    @pytest.mark.asyncio
+    async def test_h2h_dedups_same_match_id_even_if_orientation_differs(self) -> None:
+        svc = FootballService()
+        # Один и тот же матч с одинаковым id из двух списков,
+        # но с разной ориентацией home/away.
+        team_results = [
+            self._make_match("boxscore_123", "СКА", "GM", 1, 2),
+        ]
+        opponent_results = [
+            self._make_match("boxscore_123", "GM", "СКА", 2, 1),
+        ]
+
+        h2h = await svc._get_head_to_head(team_results, opponent_results, "СКА", "GM")
+        assert h2h["total"] == 1
+        assert h2h["team_wins"] == 0
+        assert h2h["opponent_wins"] == 1
+
+
+class TestPredictionReliableH2H:
+    """Тесты: в прогнозе H2H приоритетно берётся из boxscore."""
+
+    @pytest.mark.asyncio
+    async def test_prediction_h2h_prefers_boxscore_results(self) -> None:
+        svc = FootballService()
+
+        team = Team(id="1", name="СКА", url="https://example.com/teams/1/", league_id="L1")
+        opponent = Team(id="2", name="GM", url="https://example.com/teams/2/", league_id="L1")
+        league = League(id="L1", name="Лига", url="https://example.com/league/")
+
+        upcoming_preview = Match(
+            id="preview_100",
+            home_team="СКА",
+            away_team="GM",
+            status="scheduled",
+        )
+
+        # Надёжная личная встреча: СКА проиграла (0:1)
+        reliable_h2h = Match(
+            id="boxscore_500",
+            home_team="СКА",
+            away_team="GM",
+            home_score=0,
+            away_score=1,
+            status="finished",
+        )
+        # Ненадёжная fallback-встреча с противоположным результатом
+        fallback_h2h = Match(
+            id="candidate_x",
+            home_team="СКА",
+            away_team="GM",
+            home_score=3,
+            away_score=0,
+            status="finished",
+        )
+
+        async def _get_team_upcoming_matches(_team: Team):
+            return [upcoming_preview]
+
+        async def _get_team_recent_results(arg_team: Team):
+            if arg_team.id == team.id:
+                return [reliable_h2h, fallback_h2h]
+            return [reliable_h2h, fallback_h2h]
+
+        async def _find_team_in_league(_name: str, _league_id: str):
+            return opponent
+
+        async def _find_team_by_name(_name: str):
+            return opponent
+
+        async def _get_league_by_id(_league_id: str):
+            return league
+
+        async def _get_league_standings(_league: League):
+            return []
+
+        svc.get_team_upcoming_matches = _get_team_upcoming_matches  # type: ignore[assignment]
+        svc.get_team_recent_results = _get_team_recent_results  # type: ignore[assignment]
+        svc._find_team_in_league = _find_team_in_league  # type: ignore[assignment]
+        svc._find_team_by_name = _find_team_by_name  # type: ignore[assignment]
+        svc.get_league_by_id = _get_league_by_id  # type: ignore[assignment]
+        svc.get_league_standings = _get_league_standings  # type: ignore[assignment]
+
+        prediction = await svc.get_team_match_prediction(team)
+
+        assert prediction is not None
+        # Должен учитываться только boxscore H2H, а не fallback.
+        assert prediction.h2h_total == 1
+        assert prediction.h2h_home_wins == 0
+        assert prediction.h2h_away_wins == 1
+
+
+class TestTeamMatchesPriority:
+    """Тесты приоритета подтверждённых матчей над fallback."""
+
+    @pytest.mark.asyncio
+    async def test_confirmed_matches_are_not_dropped_by_majority_fallback(self) -> None:
+        svc = FootballService()
+        team = Team(id="t1", name="СКА", url="https://example.com/teams/1/")
+
+        confirmed_match = Match(
+            id="boxscore_1",
+            home_team="СКА",
+            away_team="Соперник A",
+            status="finished",
+            home_score=1,
+            away_score=0,
+        )
+        fallback_match_1 = Match(
+            id="fallback_1",
+            home_team="СКА",
+            away_team="Соперник B",
+            status="finished",
+            home_score=0,
+            away_score=2,
+        )
+        fallback_match_2 = Match(
+            id="fallback_2",
+            home_team="СКА",
+            away_team="Соперник C",
+            status="scheduled",
+            home_score=None,
+            away_score=None,
+        )
+
+        class _Candidate:
+            def __init__(self, match_url: str, fallback_match: Match) -> None:
+                self.match_url = match_url
+                self._fallback_match = fallback_match
+
+            def as_match(self) -> Match:
+                return self._fallback_match
+
+        class _FakeParser:
+            async def get_team_match_candidates(self, _team_url: str):
+                return [
+                    _Candidate("https://example.com/boxscore/1/", fallback_match_1),
+                    _Candidate("https://example.com/boxscore/2/", fallback_match_1),
+                    _Candidate("", fallback_match_2),
+                ]
+
+            async def get_match_boxscore(self, match_url: str):
+                if match_url.endswith("/1/"):
+                    return confirmed_match
+                return None
+
+            async def get_match_preview(self, _match_url: str):
+                return None
+
+        svc._parser = _FakeParser()  # type: ignore[assignment]
+
+        matches = await svc.get_team_matches(team)
+
+        ids = {m.id for m in matches}
+        assert "boxscore_1" in ids
+        assert "fallback_2" in ids

@@ -24,7 +24,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import quote, urljoin
 
@@ -441,6 +441,100 @@ class SiteParser:
             len(leagues), len(seen_urls), len(html)
         )
         return leagues
+
+    # ========================================================================
+    # КАНДИДАТЫ В МАТЧИ (со страницы команды)
+    # ========================================================================
+
+    async def get_team_match_candidates(self, team_url: str) -> list:
+        """Получить кандидатов в матчи со страницы команды.
+
+        Это НЕ подтверждённые матчи — только ссылки и даты.
+        Источник истины: boxscore для сыгранных, preview для будущих.
+
+        Args:
+            team_url: URL страницы команды.
+
+        Returns:
+            Список MatchCandidate.
+        """
+        from app.models.football import MatchCandidate
+
+        logger.info("[candidates] Загрузка: %s", team_url)
+
+        try:
+            html = await self._fetch_page(team_url)
+            soup = self._parse_html(html)
+        except SiteParserError as e:
+            logger.error("[candidates] Ошибка: %s", e)
+            return []
+
+        candidates: list[MatchCandidate] = []
+
+        for table in soup.find_all("table", class_="table_box_row"):
+            rows = table.find_all("tr")
+            if len(rows) < 2:
+                continue
+
+            header_cells = rows[0].find_all(["th", "td"])
+            header_text = " ".join(clean_text(c.get_text()).lower() for c in header_cells)
+            if "дата" not in header_text or "соперник" not in header_text:
+                continue
+
+            team_name = self._extract_current_team_name(soup)
+
+            for row in rows[1:]:
+                c = self._parse_candidate_row(row, team_name)
+                if c:
+                    candidates.append(c)
+
+            if candidates:
+                break
+
+        if not candidates:
+            logger.warning("[candidates] Не найдено матчей на странице")
+
+        return candidates
+
+    def _parse_candidate_row(self, row, team_name: str):
+        """Распарсить одну строку матча как кандидата."""
+        from app.models.football import MatchCandidate
+
+        cells = row.find_all(["td", "th"])
+        if len(cells) < 4:
+            return None
+
+        date_text = clean_text(cells[0].get_text())
+        round_text = clean_text(cells[1].get_text()) if len(cells) > 1 else ""
+
+        opponent_link = cells[2].find("a", href=True) if len(cells) > 2 else None
+        opponent_name = clean_text(opponent_link.get_text()) if opponent_link else ""
+        if not opponent_name or len(opponent_name) < 2:
+            return None
+
+        score_cell = cells[3] if len(cells) > 3 else None
+        score_raw = clean_text(score_cell.get_text()) if score_cell else ""
+
+        match_url = ""
+        if score_cell:
+            link = score_cell.find("a", href=True)
+            if link:
+                match_url = self._make_absolute_url(link.get("href", ""))
+
+        is_finished = "/preview/" not in match_url if match_url else False
+
+        score_text = score_raw.rstrip("ВНП")
+        score_text = clean_text(score_text)
+
+        return MatchCandidate(
+            date_text=date_text,
+            round_text=round_text,
+            opponent_name=opponent_name,
+            score_text=score_text,
+            match_url=match_url,
+            is_finished=is_finished,
+            team_name=team_name,
+        )
 
     # ========================================================================
     # КОМАНДЫ
@@ -2226,8 +2320,247 @@ class SiteParser:
         )
 
     # ========================================================================
-    # ПОИСК КОМАНД
+    # BOXSCORE — источник истины для сыгранного матча
     # ========================================================================
+
+    async def get_match_boxscore(self, match_url: str) -> Optional[Match]:
+        """Распарсить boxscore (протокол матча) — источник истины.
+
+        Args:
+            match_url: URL boxscore страницы, например
+                /tournaments/boxscore/140352/
+
+        Returns:
+            Match с реальными данными или None.
+        """
+        logger.info("[boxscore] Загрузка: %s", match_url)
+
+        try:
+            html = await self._fetch_page(match_url)
+            soup = self._parse_html(html)
+        except SiteParserError as e:
+            logger.error("[boxscore] Ошибка загрузки: %s", e)
+            return None
+
+        match = self._parse_boxscore(soup, match_url)
+        if match is None:
+            _debug_save(html, "boxscore_parse_fail", extra=match_url)
+        return match
+
+    def _parse_boxscore(self, soup: BeautifulSoup, match_url: str) -> Optional[Match]:
+        """Извлечь данные матча из boxscore.
+
+        Структура boxscore:
+        - Счёт: div внутри table.boxscore-totals → "2 : 1"
+        - Команды: ссылки в td table.boxscore-totals
+        - Дата: текст до счёта, "15 марта 2026 г., воскресенье, 16:00"
+        - Стадион: ссылка после даты
+        """
+        # --- Счёт и команды ---
+        totals_table = soup.find("table", class_="boxscore-totals")
+        if not totals_table:
+            logger.warning("[boxscore] Не найдена таблица boxscore-totals")
+            return None
+
+        links = totals_table.find_all("a", href=True)
+        if len(links) < 2:
+            logger.warning("[boxscore] Не найдены ссылки на команды")
+            return None
+
+        home_link = links[0]
+        away_link = links[1]
+
+        home_team_name = clean_text(home_link.get_text())
+        away_team_name = clean_text(away_link.get_text())
+        home_team_url = self._make_absolute_url(home_link.get("href", ""))
+        away_team_url = self._make_absolute_url(away_link.get("href", ""))
+
+        home_team_id = self._extract_team_id_from_url(home_team_url)
+        away_team_id = self._extract_team_id_from_url(away_team_url)
+
+        # Счёт
+        score_div = totals_table.find("div", class_="bold")
+        if not score_div:
+            # Альтернативный поиск
+            for div in totals_table.find_all("div"):
+                text = clean_text(div.get_text())
+                if re.match(r"\d+\s*:\s*\d+", text):
+                    score_div = div
+                    break
+
+        if not score_div:
+            logger.warning("[boxscore] Не найден счёт")
+            return None
+
+        score_text = clean_text(score_div.get_text())
+        score_m = re.match(r"^(\d+)\s*:\s*(\d+)$", score_text)
+        if not score_m:
+            logger.warning("[boxscore] Не удалось распарсить счёт: '%s'", score_text)
+            return None
+
+        home_score = int(score_m.group(1))
+        away_score = int(score_m.group(2))
+
+        # Дата
+        date_text = self._extract_boxscore_date(soup)
+        match_date = parse_russian_date(date_text) if date_text else None
+
+        # Стадион
+        venue = self._extract_boxscore_venue(soup)
+
+        # Турнир из title
+        league_name = self._extract_boxscore_league(soup)
+
+        # ID матча из URL
+        boxscore_id_m = re.search(r"/boxscore/(\d+)/?", match_url)
+        match_id = f"boxscore_{boxscore_id_m.group(1)}" if boxscore_id_m else f"boxscore_{home_team_id}_{away_team_id}"
+
+        return Match(
+            id=match_id,
+            league_name=league_name,
+            home_team=home_team_name,
+            away_team=away_team_name,
+            match_date=match_date,
+            status="finished",
+            home_score=home_score,
+            away_score=away_score,
+            url=self._make_absolute_url(match_url),
+            venue=venue,
+        )
+
+    def _extract_boxscore_date(self, soup: BeautifulSoup) -> str:
+        """Извлечь дату из boxscore страницы."""
+        # Ищем текст вида "15 марта 2026 г., воскресенье, 16:00"
+        for div in soup.find_all("div", class_="xsmall"):
+            text = clean_text(div.get_text())
+            if re.search(r"\d{1,2}\s+\S+\s+\d{4}", text):
+                # Убираем "г.," — parse_russian_date не поймёт
+                text = text.replace(" г.", "").replace(" г,", "")
+                return text
+        return ""
+
+    def _extract_boxscore_venue(self, soup: BeautifulSoup) -> str:
+        """Извлечь стадион из boxscore страницы."""
+        for div in soup.find_all("div", class_=["xsmall", "gray"]):
+            text = clean_text(div.get_text())
+            if "Барнаул" in text or "стадион" in text.lower() or "зал" in text.lower():
+                # Ищем ссылку на стадион
+                link = div.find("a")
+                if link:
+                    return clean_text(link.get_text())
+                return text.split(".")[0].strip() if "." in text else text
+        return ""
+
+    def _extract_boxscore_league(self, soup: BeautifulSoup) -> str:
+        """Извлечь название лиги из title страницы."""
+        title = soup.find("title")
+        if title:
+            text = title.get_text()
+            m = re.search(r"^(.*?)\s*[-–—|]", text)
+            if m:
+                league = clean_text(m.group(1))
+                if league and len(league) > 3:
+                    return league
+        return ""
+
+    def _extract_team_id_from_url(self, url: str) -> str:
+        """Извлечь ID команды из URL."""
+        m = re.search(r"/teams/(\d+)/?", url)
+        return m.group(1) if m else ""
+
+    # ========================================================================
+    # PREVIEW — источник истины для будущего матча
+    # ========================================================================
+
+    async def get_match_preview(self, match_url: str) -> Optional[Match]:
+        """Распарсить preview (сравнение команд) — источник истины для будущего матча.
+
+        Args:
+            match_url: URL preview страницы, например
+                /tournaments/boxscore/140750/preview/
+
+        Returns:
+            Match с реальными данными или None.
+        """
+        logger.info("[preview] Загрузка: %s", match_url)
+
+        try:
+            html = await self._fetch_page(match_url)
+            soup = self._parse_html(html)
+        except SiteParserError as e:
+            logger.error("[preview] Ошибка загрузки: %s", e)
+            return None
+
+        match = self._parse_preview(soup, match_url)
+        if match is None:
+            _debug_save(html, "preview_parse_fail", extra=match_url)
+        return match
+
+    def _parse_preview(self, soup: BeautifulSoup, match_url: str) -> Optional[Match]:
+        """Извлечь данные будущего матча из preview страницы.
+
+        Структура preview:
+        - Команды: ссылки в div class="xxmedium" рядом с иконкой сравнения
+        - Дата: в title страницы или в тексте страницы
+        """
+        # --- Команды ---
+        # Ищем два div class="xxmedium" с ссылками
+        team_links: list[tuple[str, str]] = []
+        for div in soup.find_all("div", class_="xxmedium"):
+            link = div.find("a", href=True)
+            if link:
+                name = clean_text(link.get_text())
+                url = self._make_absolute_url(link.get("href", ""))
+                if "/teams/" in url and name and len(name) >= 2:
+                    team_links.append((name, url))
+                    if len(team_links) >= 2:
+                        break
+
+        if len(team_links) < 2:
+            logger.warning("[preview] Не найдены команды (найдено: %d)", len(team_links))
+            return None
+
+        home_team_name, home_team_url = team_links[0]
+        away_team_name, away_team_url = team_links[1]
+        home_team_id = self._extract_team_id_from_url(home_team_url)
+        away_team_id = self._extract_team_id_from_url(away_team_url)
+
+        # Дата из title: "СКА ... - GM SPORT ... | 11 апреля 2026 - ..."
+        title = soup.find("title")
+        match_date: datetime | None = None
+        if title:
+            text = title.get_text()
+            date_m = re.search(r"\|\s*(\d{1,2}\s+\S+\s+\d{4})", text)
+            if date_m:
+                match_date = parse_russian_date(date_m.group(1))
+
+        # Если не нашли в title — ищем в body
+        if match_date is None:
+            for div in soup.find_all("div"):
+                text = clean_text(div.get_text())
+                parsed = parse_russian_date(text)
+                if parsed and parsed > datetime.now() - timedelta(days=1):
+                    match_date = parsed
+                    break
+
+        # Турнир
+        league_name = self._extract_boxscore_league(soup)
+
+        # ID
+        preview_id_m = re.search(r"/boxscore/(\d+)/", match_url)
+        match_id = f"preview_{preview_id_m.group(1)}" if preview_id_m else f"preview_{home_team_id}_{away_team_id}"
+
+        return Match(
+            id=match_id,
+            league_name=league_name,
+            home_team=home_team_name,
+            away_team=away_team_name,
+            match_date=match_date,
+            status="scheduled",
+            home_score=None,
+            away_score=None,
+            url=self._make_absolute_url(match_url),
+        )
 
     async def search_teams(self, query: str) -> list[Team]:
         """Поиск команды по названию.
@@ -2377,13 +2710,15 @@ class SiteParser:
             if len(rows) < 2:
                 continue
 
-            # Проверяем что это таблица заявки (есть колонка "Имя")
+            # Проверяем что это таблица заявки:
+            # обязательно должна содержать "Имя" и хотя бы один
+            # из характерных столбцов ("№", "Дата рождения").
             header_cells = rows[0].find_all(["th", "td"])
-            has_name_col = any(
-                "имя" in clean_text(c.get_text()).lower()
-                for c in header_cells
-            )
-            if not has_name_col:
+            header_texts = [clean_text(c.get_text()).lower() for c in header_cells]
+            has_name_col = any("имя" in t for t in header_texts)
+            has_number_col = any(t in ("№", "no", "n") or "№" in t for t in header_texts)
+            has_birth_col = any("дата рождения" in t for t in header_texts)
+            if not (has_name_col and (has_number_col or has_birth_col)):
                 continue
 
             for row in rows[1:]:
@@ -2515,18 +2850,20 @@ class SiteParser:
         stats: list[PlayerStat] = []
         seen_names: set[str] = set()
 
-        for table in soup.find_all("table", class_="table_box_cell"):
+        for table in soup.find_all("table"):
             rows = table.find_all("tr")
             if len(rows) < 2:
                 continue
 
-            # Проверяем заголовок
+            # Проверяем заголовок: нужна статистическая таблица игроков,
+            # а не любая таблица с именами.
             header_cells = rows[0].find_all(["th", "td"])
-            has_name_col = any(
-                "имя" in clean_text(c.get_text()).lower()
-                for c in header_cells
-            )
-            if not has_name_col:
+            header_texts = [clean_text(c.get_text()).lower() for c in header_cells]
+            has_name_col = any("имя" in t for t in header_texts)
+            has_games_col = any(t in ("игр", "игры", "и") or "игр" in t for t in header_texts)
+            has_goals_col = any("гол" in t for t in header_texts)
+            has_cards_col = any("жк" in t or "кк" in t for t in header_texts)
+            if not (has_name_col and has_games_col and (has_goals_col or has_cards_col)):
                 continue
 
             # Парсим строки

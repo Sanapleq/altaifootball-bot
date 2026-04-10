@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Optional
 
@@ -272,3 +273,55 @@ class MatchPrediction(BaseModel):
     predicted_home_score: int = 0
     predicted_away_score: int = 0
     prediction_text: str = ""
+
+
+from dataclasses import dataclass
+from typing import Optional as _Optional
+
+
+@dataclass
+class MatchCandidate:
+    """Кандидат в матчи со страницы команды.
+
+    Это НЕ подтверждённый матч — только ссылка и дата.
+    Источник истины для сыгранных = boxscore, для будущих = preview.
+    """
+
+    date_text: str = ""
+    round_text: str = ""
+    opponent_name: str = ""
+    score_text: str = ""
+    match_url: str = ""  # ссылка на boxscore или preview
+    is_finished: bool = False  # True если есть boxscore, False если preview
+    team_name: str = ""  # имя текущей команды (для fallback)
+
+    def as_match(self) -> "Match":
+        """Создать Match из кандидата (fallback, когда boxscore/preview недоступен)."""
+        from app.utils.dates import parse_russian_date as _parse_date
+
+        match_date = _parse_date(self.date_text) if self.date_text else None
+
+        # Парсим счёт если есть
+        home_score: int | None = None
+        away_score: int | None = None
+        status = "scheduled" if not self.is_finished else "finished"
+
+        score_m = re.match(r"^(\d+)\s*[:\-]\s*(\d+)", self.score_text)
+        if score_m:
+            home_score = int(score_m.group(1))
+            away_score = int(score_m.group(2))
+            status = "finished"
+        elif self.score_text == "?-?":
+            status = "scheduled"
+
+        # На странице команды счёт от лица команды
+        return Match(
+            id=f"candidate_{self.opponent_name}_{self.date_text}",
+            home_team=self.team_name,
+            away_team=self.opponent_name,
+            match_date=match_date,
+            status=status,
+            home_score=home_score,
+            away_score=away_score,
+            round=self.round_text if self.round_text else None,
+        )
